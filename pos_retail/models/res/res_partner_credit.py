@@ -3,6 +3,7 @@ from odoo import api, fields, models, tools, _
 
 class res_partner_credit(models.Model):
     _name = "res.partner.credit"
+    _description = "Customer credit"
 
     name = fields.Char('Name', required=1)
     amount = fields.Float('Amount', required=1)
@@ -19,14 +20,14 @@ class res_partner_credit(models.Model):
     @api.model
     def create(self, vals):
         record = super(res_partner_credit, self).create(vals)
-        record.partner_id.sync()
+        self.env['pos.cache.database'].insert_data('res.partner', record.partner_id.id)
         return record
 
     @api.multi
     def write(self, vals):
         res = super(res_partner_credit, self).write(vals)
         for credit in self:
-            credit.partner_id.sync()
+            self.env['pos.cache.database'].insert_data('res.partner', credit.partner_id.id)
         return res
 
     @api.multi
@@ -36,5 +37,5 @@ class res_partner_credit(models.Model):
             partners.append(credit.partner_id)
         res = super(res_partner_credit, self).unlink()
         for partner in partners:
-            partner.sync()
+            self.env['pos.cache.database'].insert_data('res.partner', partner.id)
         return res

@@ -25,6 +25,7 @@
             </field>
         </record>
 
+        <!--
         <record id="stock_production_lot_retail_simple_form" model="ir.ui.view">
             <field name="name">stock.production.lot.simple.retail</field>
             <field name="model">stock.production.lot</field>
@@ -47,6 +48,13 @@
                 </xpath>
             </field>
         </record>
+        -->
+
+        <menuitem action="stock.action_production_lot_form"
+            id="menu_action_production_lot"
+            parent="menu_master_data"
+            groups="stock.group_production_lot"
+            sequence="23"/>
 
     </data>
 </odoo>

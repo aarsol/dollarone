@@ -11,23 +11,16 @@ odoo.define('pos_retail.order', function (require) {
     var round_pr = utils.round_precision;
     var models = require('point_of_sale.models');
     var core = require('web.core');
-    var qweb = core.qweb;
     var _t = core._t;
 
     var _super_Order = models.Order.prototype;
-    models.Order = models.Order.extend({    	
+    models.Order = models.Order.extend({
         initialize: function (attributes, options) {
             _super_Order.initialize.apply(this, arguments);
             var self = this;
             this.orderlines.bind('change add remove', function (line) {
                 self.pos.trigger('update:count_item')
             });
-            if (!this.plus_point) {
-                this.plus_point = 0;
-            }
-            if (!this.redeem_point) {
-                this.redeem_point = 0;
-            }
             if (!this.note) {
                 this.note = '';
             }
@@ -37,27 +30,42 @@ odoo.define('pos_retail.order', function (require) {
             this.orderlines.bind('change add remove', function (line) {
                 self.trigger('update:table-list');
             });
-            if (this.pos.server_version == 10 && this.pos.default_pricelist) { // default price list for version 10
-                if (!this.pricelist) {
-                    this.pricelist = this.pos.default_pricelist;
-                    this.set_pricelist_to_order(this.pricelist);
+            if (!options.json) {
+                if (!this.location) {
+                    var location = this.get_location();
+                    this.set_location(location)
                 }
-            }
-            if (!this.lock) {
-                this.lock = false;
-            }
-             if (!this.userlocked) {
-                this.userlocked = false;
-            }
-            
-            if (this.pos.config.pos_auto_invoice) { // auto checked button invoice if field pos_auto_invoice checked at pos config
-                this.to_invoice = true;
-            }
-            if (this.pos.config.auto_register_payment) { // auto checked button auto register payment if field auto_register_payment checked at pos config
-                this.auto_register_payment = true;
+                if (this.pos.config.pos_auto_invoice) {
+                    this.to_invoice = true;
+                }
+                if (this.pos.server_version == 10 && this.pos.default_pricelist) { // default price list for version 10
+                    if (!this.pricelist) {
+                        this.pricelist = this.pos.default_pricelist;
+                        this.set_pricelist_to_order(this.pricelist);
+                    }
+                }
+                if (!this.lock) {
+                    this.lock = false;
+                }
+                if (!this.seller && this.pos.default_seller) {
+                    this.seller = this.pos.default_seller;
+                }
             }
         },
         init_from_JSON: function (json) {
+            // TODO: we removed line have product removed
+            var lines = json.lines;
+            var lines_without_product_removed = [];
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i];
+                var product_id = line[2]['product_id'];
+                var product = this.pos.db.get_product_by_id(product_id);
+                if (product) {
+                    lines_without_product_removed.push(line)
+                }
+            }
+            json.lines = lines_without_product_removed;
+            // ---------------------------------
             var res = _super_Order.init_from_JSON.apply(this, arguments);
             if (json.date) {
                 this.date = json.date;
@@ -70,9 +78,6 @@ odoo.define('pos_retail.order', function (require) {
             }
             if (json.email_invoice) {
                 this.email_invoice = json.email_invoice;
-            }
-            if (json.auto_register_payment) {
-                this.auto_register_payment = json.auto_register_payment;
             }
             if (json.delivery_date) {
                 this.delivery_date = json.delivery_date;
@@ -95,26 +100,19 @@ odoo.define('pos_retail.order', function (require) {
             if (json.is_return) {
                 this.is_return = json.is_return;
             }
-            if (json.add_credit) {
-                this.add_credit = json.add_credit;
-            }
             if (json.to_invoice) {
                 this.to_invoice = json.to_invoice;
             }
             if (json.parent_id) {
                 this.parent_id = json.parent_id;
             }
-            if (json.invoice_journal_id) {
-                this.invoice_journal_id = json.invoice_journal_id;
-            }            
+            if (json.sale_journal) {
+                this.sale_journal = json.sale_journal;
+            } else {
+                this.sale_journal = this.pos.get_default_sale_journal();
+            }
             if (json.ean13) {
                 this.ean13 = json.ean13;
-            }
-            if (json.plus_point) {
-                this.plus_point = json.plus_point;
-            }
-            if (json.redeem_point) {
-                this.redeem_point = json.redeem_point;
             }
             if (json.signature) {
                 this.signature = json.signature
@@ -143,15 +141,37 @@ odoo.define('pos_retail.order', function (require) {
             } else {
                 this.lock = false;
             }
-            if (json.userlocked) {
-                this.userlocked = json.userlocked;
+            if (json.medical_insurance_id) {
+                this.medical_insurance = this.pos.db.insurance_by_id[json.medical_insurance_id];
+            }
+            if (json.guest) {
+                this.guest = json.guest;
+            }
+            if (json.guest_number) {
+                this.guest_number = json.guest_number;
+            }
+            if (json.location_id) {
+                this.location_id = json.location_id;
+                this.location = this.pos.stock_location_by_id[json.location_id];
+            }
+            if (json.add_credit) {
+                this.add_credit = json.add_credit
             } else {
-                this.userlocked = json.user_id;
+                this.add_credit = false;
+            }
+            if (json.user_id) {
+                this.seller = this.pos.user_by_id[json.user_id];
+            }
+            if (json.pos_branch_id) {
+                this.pos_branch_id = json.pos_branch_id;
             }
             return res;
         },
         export_as_JSON: function () {
             var json = _super_Order.export_as_JSON.apply(this, arguments);
+            if (this.seller) {
+                json.user_id = this.seller['id'];
+            }
             if (this.partial_payment) {
                 json.partial_payment = this.partial_payment
             }
@@ -161,9 +181,6 @@ odoo.define('pos_retail.order', function (require) {
                 if (client && client.email) {
                     json.email = client.email;
                 }
-            }
-            if (this.auto_register_payment) {
-                json.auto_register_payment = this.auto_register_payment;
             }
             if (this.delivery_date) {
                 json.delivery_date = this.delivery_date;
@@ -189,17 +206,10 @@ odoo.define('pos_retail.order', function (require) {
             if (this.parent_id) {
                 json.parent_id = this.parent_id;
             }
-            if (this.add_credit) {
-                json.add_credit = this.add_credit;
-            }
-            if (this.invoice_journal_id) {
-                json.invoice_journal_id = this.invoice_journal_id;
-            }
-            if (this.voucher_id) {
-                json.voucher_id = parseInt(this.voucher_id);
-            }
-            if (this.promotion_amount) {
-                json.promotion_amount = this.promotion_amount;
+            if (this.sale_journal) {
+                json.sale_journal = this.sale_journal;
+            } else {
+                this.sale_journal = this.pos.get_default_sale_journal();
             }
             if (this.note) {
                 json.note = this.note;
@@ -210,212 +220,105 @@ odoo.define('pos_retail.order', function (require) {
             if (this.ean13) {
                 json.ean13 = this.ean13;
             }
-            if (this.expire_date) {
-                json.expire_date = this.expire_date;
-            }
-            if (!this.expire_date) { // init expired date
-                var today = new Date();
-                var expire_date = new Date(today.getFullYear(), today.getMonth(), today.getDate() + this.pos.config.pos_order_period_return_days, today.getHours());
-                this.expire_date = expire_date;
-            }
-            if (!this.ean13 && this.uid) { // init ean13 and automatic create ean13 for order
-                var ean13 = '998';
-                if (this.pos.user.id) {
-                    ean13 += this.pos.user.id;
-                }
-                if (this.sequence_number) {
-                    ean13 += this.sequence_number;
-                }
-                if (this.pos.config.id) {
-                    ean13 += this.pos.config.id;
-                }
-                var format_ean13 = this.uid.split('-');
-                for (var i in format_ean13) {
-                    ean13 += format_ean13[i];
-                }
-                ean13 = ean13.split("");
-                var ean13_array = []
-                var ean13_str = ""
+            if (!this.ean13 && this.uid) {
+                var ean13_code = this.zero_pad(this.pos.user.id, 4) + this.zero_pad(this.pos.pos_session.login_number, 4) + this.zero_pad(this.sequence_number, 4);
+                var ean13 = ean13_code.split("");
+                var ean13_array = [];
                 for (var i = 0; i < ean13.length; i++) {
                     if (i < 12) {
-                        ean13_str += ean13[i]
                         ean13_array.push(ean13[i])
                     }
                 }
-                this.ean13 = ean13_str + this.generate_unique_ean13(ean13_array).toString()
+                this.ean13 = ean13_code + this.generate_unique_ean13(ean13_array).toString();
             }
-            if (this.plus_point) {
-                json.plus_point = this.plus_point;
-            }
-            if (this.redeem_point) {
-                json.redeem_point = this.redeem_point;
-            }
-            if (this.pos.server_version == 10 && this.pricelist) { // export price list for version 10
-                json.pricelist_id = this.pricelist.id;
+            if (!this.index_number_order && this.uid) {
+                var index_number_order = '777';
+                if (this.pos.user.id) {
+                    index_number_order += this.pos.user.id;
+                }
+                if (this.sequence_number) {
+                    index_number_order += this.sequence_number;
+                }
+                if (this.pos.config.id) {
+                    index_number_order += this.pos.config.id;
+                }
+                var format_index_number_order = this.uid.split('-');
+                for (var i in format_index_number_order) {
+                    index_number_order += format_index_number_order[i];
+                }
+                index_number_order = index_number_order.split("");
+                var index_number_order_array = [];
+                var index_number_order_str = "";
+                for (var i = 0; i < index_number_order.length; i++) {
+                    if (i < 12) {
+                        index_number_order_str += index_number_order[i];
+                        index_number_order_array.push(index_number_order[i])
+                    }
+                }
+                this.index_number_order = index_number_order_str + this.generate_unique_ean13(index_number_order_array).toString();
             }
             if (this.lock) {
                 json.lock = this.lock;
             } else {
                 json.lock = false;
             }
-            if (this.userlocked) {
-                json.userlocked = this.userlocked;
-            } else {
-                json.userlocked = this.user_id;
-            }
             if (this.invoice_number) {
                 json.invoice_number = this.invoice_number
             }
+            if (this.medical_insurance) {
+                json.medical_insurance_id = this.medical_insurance.id
+            }
+            if (this.guest) {
+                json.guest = this.guest.id
+            }
+            if (this.guest_number) {
+                json.guest_number = this.guest_number.id
+            }
+            if (this.add_credit) {
+                json.add_credit = this.add_credit
+            } else {
+                json.add_credit = false
+            }
+            if (this.location) {
+                json.location_id = this.location['id'];
+            }
+            if (this.pos.config.pos_branch_id) {
+                json.pos_branch_id = this.pos.config.pos_branch_id[0];
+            }
             return json;
-        },
-        validate_promotion: function () {
-            var self = this;
-            var active_promotion = this.current_order_can_apply_promotion();
-            var promotions_apply = active_promotion['promotions_apply'];
-            if (promotions_apply.length) {
-                this.pos.gui.show_screen('products');
-                this.pos.gui.show_popup('confirm', {
-                    title: 'Promotion active',
-                    body: 'Are you want apply promotion on this order ?',
-                    confirm: function () {
-                        self.remove_all_promotion_line();
-                        self.compute_promotion();
-                        setTimeout(function () {
-                            self.validate_global_discount();
-                        }, 1000);
-                        self.pos.gui.show_screen('payment');
-                    },
-                    cancel: function () {
-                        setTimeout(function () {
-                            self.validate_global_discount();
-                        }, 1000);
-                        self.pos.gui.show_screen('payment');
-                    }
-                });
-            } else {
-                setTimeout(function () {
-                    self.validate_global_discount();
-                }, 1000);
-            }
-        },
-        validate_global_discount: function () {
-            var self = this;
-            var client = this && this.get_client();
-            if (client && client['discount_id']) {
-                this.pos.gui.show_screen('products');
-                this.discount = this.pos.discount_by_id[client['discount_id'][0]];
-                this.pos.gui.show_screen('products');
-                var body = client['name'] + ' have discount ' + self.discount['name'] + '. Are you want apply ?';
-                return this.pos.gui.show_popup('confirm', {
-                    'title': _t('Customer special discount ?'),
-                    'body': body,
-                    confirm: function () {
-                        self.add_global_discount(self.discount);
-                        self.pos.gui.show_screen('payment');
-                        self.validate_payment();
-                    },
-                    cancel: function () {
-                        self.pos.gui.show_screen('payment');
-                        self.validate_payment();
-                    }
-                });
-            } else {
-                this.validate_payment();
-            }
-        },
-        validate_payment: function () {
-            var self = this;
-            if (this.pos.config.validate_payment) {
-                this.pos.gui.show_screen('products');
-                return this.pos.gui.show_popup('password', {
-                    title: 'Input pos security pin ?',
-                    confirm: function (value) {
-                        if (value != this.pos.user.pos_security_pin) {
-                            return this.pos.gui.show_popup('confirm', {
-                                title: 'Wrong',
-                                body: 'Password not correct, please check pos security pin'
-                            })
-                        } else {
-                            return self.pos.gui.show_screen('payment');
-                        }
-                    }
-                })
-            }
-        },
-        validate_payment_order: function () {
-            if (this && this.orderlines.models.length == 0) {
-                this.pos.gui.show_screen('products');
-                return this.pos.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Your order lines is blank'
-                })
-            }
-            this.validate_promotion();
-        },
-        
-        add_global_discount: function (discount) {
-            
-            var product = this.pos.db.product_by_id[discount.product_id[0]]
-            
-            // added by AARSOL
-            if (product === undefined) {
-				this.gui.show_popup('error', {
-				    title : _t("No discount Product Found"),
-				    body  : _t("The discount product seems misconfigured. Make sure it is flagged as 'Can be Sold' and 'Available in Point of Sale'."),
-				});
-				return;
-			}
-			var lines = this.get_orderlines();
-			// Remove existing discounts
-			var i = 0;
-			while ( i < lines.length ) {
-				if (lines[i].get_product() === product) {
-				    this.remove_orderline(lines[i]);
-				} else {
-				    i++;
-				}
-			}			
-			//var total_with_tax = order.get_total_with_tax();
-            var total_without_tax = this.get_total_without_tax();
-            var discount_reason = discount['name'] + '% of ' +  round_pr(total_without_tax, this.pos.currency.rounding);  //  or it should be total_with_tax
-            
-            // upto this                 
-			
-            var price = total_without_tax / 100 * discount['amount']            
-            this.add_product(product, {
-                price:  price * -1.00,
-                quantity: 1,                
-                extras: {discount_reason: discount_reason}
-            });
-            var selected_line = this.get_selected_orderline();
-            selected_line.discount_reason =   discount_reason;    //discount.reason;   // changed by AARSOL
-            selected_line.trigger('update:OrderLine', selected_line);
-            selected_line.trigger('change', selected_line);
         },
         export_for_printing: function () {
             var receipt = _super_Order.export_for_printing.call(this);
-            receipt['add_credit'] = false;
-            if (this.add_credit) {
-                receipt['add_credit'] = true;
+            var order = this.pos.get_order();
+            if (this.seller) {
+                receipt['seller'] = this.seller;
             }
-            receipt.plus_point = this.plus_point || 0;
-            receipt.redeem_point = this.redeem_point || 0;
-            if (this.amount_debit) {
-                receipt['amount_debit'] = this.amount_debit;
+            if (this.location) {
+                receipt['location'] = this.location;
+            } else {
+                var stock_location_id = this.pos.config.stock_location_id;
+                if (stock_location_id) {
+                    receipt['location'] = this.pos.stock_location_by_id[stock_location_id[0]];
+                }
             }
+            receipt['guest'] = this.guest;
+            receipt['guest_number'] = this.guest_number;
+            receipt['medical_insurance'] = null;
             receipt['delivery_date'] = this.delivery_date;
             receipt['delivery_address'] = this.delivery_address;
             receipt['delivery_phone'] = this.delivery_phone;
             receipt['note'] = this.note;
             receipt['signature'] = this.signature;
-            if (this.promotion_amount) {
-                receipt.promotion_amount = this.promotion_amount;
-            }
             if (this.fiscal_position) {
                 receipt.fiscal_position = this.fiscal_position
             }
+            if (this.amount_debit) {
+                receipt['amount_debit'] = this.amount_debit;
+            }
+            if (this.medical_insurance) {
+                receipt['medical_insurance'] = this.medical_insurance;
+            }
             var orderlines_by_category_name = {};
-            var order = this.pos.get_order();
             var orderlines = order.orderlines.models;
             var categories = [];
             receipt['categories'] = [];
@@ -425,9 +328,9 @@ odoo.define('pos_retail.order', function (require) {
                     var line = orderlines[i];
                     var pos_categ_id = line['product']['pos_categ_id']
                     line['tax_amount'] = line.get_tax();
-                    if (pos_categ_id && pos_categ_id.length == 2) {
-                        var root_category_id = order.get_root_category_by_category_id(pos_categ_id[0])
-                        var category = this.pos.db.category_by_id[root_category_id]
+                    if (pos_categ_id && pos_categ_id.length == 2 && order.get_root_category_by_category_id(pos_categ_id[0]) && this.pos.db.category_by_id[order.get_root_category_by_category_id(pos_categ_id[0])]) {
+                        var root_category_id = order.get_root_category_by_category_id(pos_categ_id[0]);
+                        var category = this.pos.db.category_by_id[root_category_id];
                         var category_name = category['name'];
                         if (!orderlines_by_category_name[category_name]) {
                             orderlines_by_category_name[category_name] = [line];
@@ -458,23 +361,315 @@ odoo.define('pos_retail.order', function (require) {
                 receipt['orderlines_by_category_name'] = orderlines_by_category_name;
                 receipt['categories'] = categories;
             }
+            receipt['total_due'] = order.get_due(); // save amount due if have (display on receipt of parital order)
             return receipt
+        },
+        remove_selected_orderline: function () {
+            var line = this.get_selected_orderline()
+            if (line) {
+                this.remove_orderline(line)
+            }
+        },
+        zero_pad: function (num, size) {
+            var s = "" + num;
+            while (s.length < size) {
+                s = s + Math.floor(Math.random() * 10).toString();
+            }
+            return s;
+        },
+        set_location: function (location) {
+            this.location = location;
+            this.trigger('change', this);
+        },
+        get_location: function () {
+            var stock_location_id = this.pos.config.stock_location_id;
+            var selected_order = this;
+            if (selected_order && selected_order.location) {
+                return selected_order.location;
+            }
+            if (stock_location_id) {
+                var location = this.pos.stock_location_by_id[stock_location_id[0]];
+                return location;
+            } else {
+                return null
+            }
+        },
+        show_popup_multi_lot: function () {
+            var self = this;
+            this.pos.gui.show_popup('popup_set_multi_lots', {
+                'title': 'Add lots',
+                'body': 'Allow you set multi lots on selected line, made sure total quantities of lots the same of quantity of selected line',
+                'selected_orderline': this.selected_orderline,
+                'lots': this.pos.lot_by_product_id[this.selected_orderline.product.id],
+                confirm: function (lot_ids) {
+                    var selected_orderline = self.selected_orderline;
+                    var lot_selected = [];
+                    for (var i = 0; i < lot_ids.length; i++) {
+                        var lot = lot_ids[i];
+                        var lot_record = self.pos.lot_by_id[lot['id']];
+                        if (lot_record && lot['quantity'] && lot['quantity'] > 0) {
+                            lot['name'] = lot_record['name'];
+                            lot_selected.push(lot)
+                        }
+                    }
+                    selected_orderline.lot_ids = lot_selected;
+                    selected_orderline.trigger('change', selected_orderline);
+                    selected_orderline.trigger('trigger_update_line');
+                    if (lot_selected.length == 0) {
+                        return self.pos.gui.show_popup('dialog', {
+                            title: 'Warning',
+                            body: 'Lots removed out of line selected'
+                        })
+                    }
+                }
+            })
+        },
+        display_lot_popup: function () {
+            if (!this.pos.config.multi_lots) {
+                return _super_Order.display_lot_popup.apply(this, arguments);
+            } else {
+                return this.show_popup_multi_lot();
+            }
+        },
+        get_medical_insurance: function () {
+            if (this.medical_insurance) {
+                return this.medical_insurance
+            } else {
+                return null
+            }
+        },
+        get_guest: function () {
+            if (this.guest) {
+                return this.guest
+            } else {
+                return null
+            }
+        },
+        set_client: function (client) {
+            var self = this;
+            var res = _super_Order.set_client.apply(this, arguments);
+            if (client) {
+                var partial_payment_orders = _.filter(this.pos.db.get_pos_orders(), function (order) {
+                    return order['partner_id'] && order['partner_id'][0] == client['id'] && order['state'] == 'partial_payment';
+                });
+                if (partial_payment_orders.length != 0) {
+                    var warning_message = 'Customer selected have orders: ';
+                    for (var i = 0; i < partial_payment_orders.length; i++) {
+                        warning_message += partial_payment_orders[i]['name'];
+                        warning_message += '(' + partial_payment_orders[i]['date_order'] + ')';
+                        if ((i + 1) == partial_payment_orders.length) {
+                            warning_message += ' .';
+                        } else {
+                            warning_message += ',';
+                        }
+                    }
+                    warning_message += ' not payment full, please check it before made new order';
+                    if (this.pos.gui.popup_instances['dialog']) {
+                        this.pos.gui.show_popup('dialog', {
+                            title: 'WARNING',
+                            body: warning_message,
+                        })
+                    }
+                }
+                if (client.group_ids.length > 0) {
+                    var list = [];
+                    for (var i = 0; i < client.group_ids.length; i++) {
+                        var group_id = client.group_ids[i];
+                        var group = this.pos.membership_group_by_id[group_id];
+                        if (group.pricelist_id) {
+                            list.push({
+                                'label': group.name,
+                                'item': group
+                            });
+                        }
+                    }
+                    if (list.length > 0 && this.pos.gui.popup_instances['selection']) {
+                        setTimeout(function () {
+                            self.pos.gui.show_popup('selection', {
+                                title: _t('Please add group/membership to customer ' + client.name),
+                                list: list,
+                                confirm: function (group) {
+                                    if (!self.pos.pricelist_by_id || !self.pos.pricelist_by_id[group.pricelist_id[0]]) {
+                                        return self.pos.gui.show_popup('dialog', {
+                                            title: 'Warning',
+                                            body: 'Your POS not added pricelist ' + group.pricelist_id[1],
+                                        })
+                                    }
+                                    var pricelist = self.pos.pricelist_by_id[group.pricelist_id[0]];
+                                    var order = self.pos.get_order();
+                                    if (order && pricelist) {
+                                        order.set_pricelist(pricelist);
+                                        return self.pos.gui.show_popup('dialog', {
+                                            title: 'Succeed',
+                                            body: group.pricelist_id[1] + ' added',
+                                            color: 'success'
+                                        })
+                                    }
+                                }
+                            });
+                        }, 1000);
+                    }
+                }
+            }
+            return res
+        },
+        validate_medical_insurance: function () {
+            var lines = this.orderlines.models;
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i];
+                if (line['medical_insurance']) {
+                    this.remove_orderline(line);
+                }
+            }
+            if (this.medical_insurance) {
+                var total_without_tax = this.get_total_without_tax();
+                var product = this.pos.db.product_by_id[this.medical_insurance.product_id[0]]
+                var price = total_without_tax / 100 * this.medical_insurance.rate
+                this.add_product(product, {
+                    price: price,
+                    quantity: -1
+                });
+                var selected_line = this.get_selected_orderline();
+                selected_line['medical_insurance'] = true;
+                selected_line.discount_reason = this.medical_insurance.name;
+                selected_line.trigger('trigger_update_line', selected_line);
+                selected_line.trigger('change', selected_line);
+            }
+        },
+        validate_global_discount: function () {
+            var self = this;
+            var client = this && this.get_client();
+            if (client && client['discount_id']) {
+                this.pos.gui.show_screen('products');
+                this.discount = this.pos.discount_by_id[client['discount_id'][0]];
+                this.pos.gui.show_screen('products');
+                var body = client['name'] + ' have discount ' + self.discount['name'] + '. Do you want to apply ?';
+                return this.pos.gui.show_popup('confirm', {
+                    'title': _t('Customer special discount ?'),
+                    'body': body,
+                    confirm: function () {
+                        self.add_global_discount(self.discount);
+                        self.pos.gui.show_screen('payment');
+                        self.validate_payment();
+                    },
+                    cancel: function () {
+                        self.pos.gui.show_screen('payment');
+                        self.validate_payment();
+                    }
+                });
+            } else {
+                this.validate_payment();
+            }
+        },
+        validate_payment: function () {
+            if (this.pos.config.validate_payment) { // TODO: validate payment
+                this.pos.gui.show_screen('products');
+                this.pos._validate_by_manager("this.pos.gui.show_screen('payment')");
+            }
+        },
+        validate_payment_order: function () {
+            var self = this;
+            var client = this.get_client();
+            if (this.pos.config.multi_lots) {
+                var orderlines = this.orderlines.models; // checking multi lots
+                for (var i = 0; i < orderlines.length; i++) {
+                    var orderline = orderlines[i];
+                    if (orderline.product.tracking == 'lot') {
+                        if (!orderline.lot_ids) {
+                            this.pos.gui.show_screen('products');
+                            return this.pos.gui.show_popup('confirm', {
+                                'title': _t('Error'),
+                                'body': _t('Product ' + orderline.product.display_name + ' null lots. Because your pos active multi lots, required add lots')
+                            });
+                        }
+                        var sum = 0;
+                        for (var j = 0; j < orderline.lot_ids.length; j++) {
+                            sum += parseFloat(orderline.lot_ids[j]['quantity'])
+                        }
+                        if (sum != orderline.quantity && sum != 0) {
+                            this.pos.gui.show_screen('products');
+                            return this.pos.gui.show_popup('confirm', {
+                                'title': _t('Could not process payment'),
+                                'body': _t('Product ' + orderline.product.display_name + ' required set quantity of lots the same with quantity of line. And your pos active multi lots, required add lots')
+                            });
+                        }
+                    }
+                }
+            }
+            if (!client && this.pos.config.add_customer_before_products_already_in_shopping_cart) {
+                setTimeout(function () {
+                    self.pos.gui.show_screen('products');
+                    self.pos.gui.show_screen('clientlist');
+                    self.pos.gui.show_popup('dialog', {
+                        title: 'Warning',
+                        body: 'Please add client the first'
+                    })
+                }, 300);
+            }
+            if (this && this.orderlines.models.length == 0) {
+                this.pos.gui.show_screen('products');
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'Your order lines is blank'
+                })
+            }
+            if (this.remaining_point && this.remaining_point < 0) {
+                this.pos.gui.show_screen('products');
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'You could not applied redeem point bigger than client point',
+                });
+            }
+            if (!this.is_return) {
+                this.validate_promotion();
+                this.validate_medical_insurance();
+            }
+        },
+        add_global_discount: function (discount) {
+            var total_without_tax = this.get_total_with_tax();
+            var product = this.pos.db.product_by_id[discount.product_id[0]];
+            var price = total_without_tax / 100 * discount['amount'];
+            this.add_product(product, {
+                price: price,
+                quantity: -1
+            });
+            var selected_line = this.get_selected_orderline();
+            selected_line.discount_reason = discount.reason;
+            selected_line.trigger('trigger_update_line', selected_line);
+            selected_line.trigger('change', selected_line);
+        },
+        set_to_invoice: function (to_invoice) {
+            if (to_invoice) {
+                this.add_credit = false;
+                this.trigger('change');
+            }
+            return _super_Order.set_to_invoice.apply(this, arguments);
+        },
+        is_add_credit: function () {
+            return this.add_credit
+        },
+        add_order_credit: function () {
+            this.add_credit = !this.add_credit;
+            if (this.add_credit) {
+                this.create_voucher = false;
+                this.set_to_invoice(false);
+            }
+            this.trigger('change');
+            if (this.add_credit && !this.get_client()) {
+                this.pos.gui.show_screen('clientlist');
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'Please add customer need add credit'
+                })
+            }
         },
         is_email_invoice: function () { // send email invoice or not
             return this.email_invoice;
-        },
-        is_auto_register_payment: function () { // auto register payment or not
-            return this.auto_register_payment;
         },
         set_email_invoice: function (email_invoice) {
             this.assert_editable();
             this.email_invoice = email_invoice;
             this.set_to_invoice(email_invoice);
-        },
-        set_auto_register_payment: function (auto_register_payment) {
-            this.assert_editable();
-            this.auto_register_payment = auto_register_payment;
-            this.set_to_invoice(auto_register_payment);
         },
         get_root_category_by_category_id: function (category_id) { // get root of category, root is parent category is null
             var root_category_id = category_id;
@@ -498,7 +693,7 @@ odoo.define('pos_retail.order', function (require) {
 
                         mapped_included_taxes.push(tax);
                     }
-                })
+                });
                 if (mapped_included_taxes.length > 0) {
                     unit_price = line.compute_all(mapped_included_taxes, unit_price, 1, this.pos.currency.rounding, true).total_excluded;
                     line.set_unit_price(unit_price);
@@ -550,29 +745,6 @@ odoo.define('pos_retail.order', function (require) {
                     $journal_element.addClass('oe_hidden');
                 }
             }
-            var company_currency = this.pos.company.currency_id; // return amount with difference currency
-            if (paymentline && paymentline.cashregister && paymentline.cashregister.currency_id && paymentline.cashregister.currency_id[0] != company_currency[0]) {
-                var new_change = -this.get_total_with_tax();
-                var lines = this.paymentlines.models;
-                var company_currency = this.pos.company.currency_id;
-                var company_currency_data = this.pos.currency_by_id[company_currency[0]];
-                for (var i = 0; i < lines.length; i++) {
-                    var selected_currency = this.pos.currency_by_id[lines[i].cashregister.currency_id[0]];
-                    var selected_rate = selected_currency['rate'];
-                    var amount_of_line = lines[i].get_amount();
-                    new_change += amount_of_line * selected_rate / company_currency_data['rate'];
-                    if (lines[i] === paymentline) {
-                        break;
-                    }
-                }
-                var currency_change = round_pr(Math.max(0, new_change), this.pos.currency.rounding);
-                if (currency_change > 0) {
-                    this.active_button_add_wallet(true);
-                } else {
-                    this.active_button_add_wallet(false);
-                }
-                return currency_change
-            }
             if (change > 0) {
                 this.active_button_add_wallet(true);
             } else {
@@ -580,77 +752,29 @@ odoo.define('pos_retail.order', function (require) {
             }
             return change;
         },
-        get_due: function (paymentline) {
+        get_due_with_currency: function (paymentline) {
             var due = _super_Order.get_due.apply(this, arguments);
+            var selected_currency = this.selected_currency;
+            if (selected_currency) {
+                return due * selected_currency['rate']
+            }
+            return due
+        },
+        get_due_without_rounding: function (paymentline) {
             if (!paymentline) {
-                return due;
-            }
-            var active_multi_currency = false;
-            var lines = this.paymentlines.models;
-            var company_currency = this.pos.company.currency_id;
-            var company_currency_data = this.pos.currency_by_id[company_currency[0]];
-            for (var i = 0; i < lines.length; i++) {
-                var line = lines[i];
-                var currency_id_of_line = line.cashregister.currency_id[0];
-                var currency_of_line = this.pos.currency_by_id[currency_id_of_line];
-                if (currency_of_line['id'] != company_currency_data['id']) {
-                    active_multi_currency = true;
-                }
-            }
-            var paymentline_currency_id = paymentline.cashregister.currency_id[0]
-            var paymentline_currency = this.pos.currency_by_id[paymentline_currency_id];
-            var payment_rate = paymentline_currency['rate'];
-            if (paymentline_currency['id'] != company_currency_data['id']) {
-                active_multi_currency = true
-            }
-            if (!active_multi_currency || active_multi_currency == false) {
-                return due;
+                var due = this.get_total_with_tax() - this.get_total_paid();
             } else {
-                var total_amount_with_tax = this.get_total_with_tax();
-                if (!payment_rate || payment_rate == 0) {
-                    return due
-                }
-                var new_due = total_amount_with_tax * payment_rate / company_currency_data['rate'];
+                var due = this.get_total_with_tax();
                 var lines = this.paymentlines.models;
                 for (var i = 0; i < lines.length; i++) {
                     if (lines[i] === paymentline) {
                         break;
                     } else {
-                        var line = lines[i];
-                        var line_cashregister = line['cashregister'];
-                        var line_currency_rate = this.pos.currency_by_id[line_cashregister['currency_id'][0]]['rate'];
-                        var line_amount = lines[i].get_amount() * line_currency_rate;
-                        new_due -= line_amount * payment_rate / company_currency_data['rate'];
+                        due -= lines[i].get_amount();
                     }
                 }
-                var new_due = round_pr(Math.max(0, new_due), this.pos.currency.rounding);
-                return new_due
             }
-        },
-        get_total_paid: function () {
-            var total_paid = _super_Order.get_total_paid.apply(this, arguments);
-            var lines = this.paymentlines.models;
-            var active_multi_currency = false;
-            var total_paid_multi_currency = 0;
-            for (var i = 0; i < lines.length; i++) {
-                var line = lines[i];
-                var currency = line.cashregister.currency_id;
-                var company_currency = this.pos.company.currency_id;
-                var company_currency_data = this.pos.currency_by_id[company_currency[0]];
-                if (currency[0] != company_currency[0]) {
-                    var register_currency = this.pos.currency_by_id[currency[0]];
-                    var register_rate = register_currency['rate'];
-                    active_multi_currency = true;
-                    total_paid_multi_currency += line.get_amount() * register_rate / company_currency_data['rate'];
-                } else {
-                    total_paid_multi_currency += line.get_amount()
-                }
-            }
-            if (active_multi_currency == true) {
-                return round_pr(Math.max(0, total_paid_multi_currency), this.pos.currency.rounding);
-            } else {
-                return total_paid;
-            }
+            return due;
         },
         generate_unique_ean13: function (array_code) {
             if (array_code.length != 12) {
@@ -665,159 +789,62 @@ odoo.define('pos_retail.order', function (require) {
                     oddsum += parseInt(array_code[i])
                 }
             }
-            var total = oddsum * 3 + evensum
+            var total = oddsum * 3 + evensum;
             return parseInt((10 - total % 10) % 10)
         },
         get_product_image_url: function (product) {
             return window.location.origin + '/web/image?model=product.product&field=image_medium&id=' + product.id;
         },
         add_product: function (product, options) {
-            if (product['qty_available'] <= 0 && this.pos.config['allow_order_out_of_stock'] == false && product['type'] == 'product') {
-                return this.pos.gui.show_popup('confirm', {
+            var self = this;
+            if (!this.pos.config.allow_order_out_of_stock && product.type == 'product' && product['qty_available'] <= 0) {
+                return this.pos.gui.show_popup('dialog', {
                     title: 'Warning',
-                    body: 'Product is out of stock, your config setting have not allowed add products when them have out of stock.',
+                    body: 'Your POS Config not allow sale when products out of stock',
                 });
-            }            
+            }
+            if (product && product['qty_available'] && product['qty_available'] <= 0 && this.pos.config['allow_order_out_of_stock'] == false && product['type'] == 'product') {
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'Product is out of stock',
+                });
+            }
             var res = _super_Order.add_product.apply(this, arguments);
-            
-            var selected_orderline = this.selected_orderline;
+            var selected_orderline = this.get_selected_orderline();
             var combo_items = [];
             for (var i = 0; i < this.pos.combo_items.length; i++) {
                 var combo_item = this.pos.combo_items[i];
-                if (combo_item.product_combo_id[0] == selected_orderline.product.product_tmpl_id && combo_item.default == true) {
+                if (combo_item.product_combo_id[0] == selected_orderline.product.product_tmpl_id && (combo_item.default == true || combo_item.required == true)) {
                     combo_items.push(combo_item);
                 }
-            } 
-                
-            if (selected_orderline) {               
-                var sel_combo_items = _.map(combo_items, function (combo_item) {
-                    combo_product = selected_orderline.order.pos.db.get_product_by_id(combo_item.product_id[0]);
-                    if(combo_product.variant_categ){                    
-                        var variant_product = selected_orderline.order.pos.db.get_product_by_id(combo_product.variant_product_id[0]);                   
-                        var vrnts = [];
-                        vrnts.push({
-                            id: variant_product.id,
-                            name: variant_product.display_name,
-                            quantity: combo_item.quantity,
-                            state: 'draft'
-                        });
-                        combo_item.variant_products = vrnts;
-                        combo_item.variant_categ = true;                    
-                    }                    
-                    combo_item.state = 'draft';    
-                    return combo_item;
-                });
-               
-                selected_orderline['combo_items'] = sel_combo_items;
-                selected_orderline.trigger('change', selected_orderline);  
-               
-                if(product['variant_categ']){                    
-                    var variant_product = selected_orderline.order.pos.db.get_product_by_id(selected_orderline.product.variant_product_id[0]);                   
-                    var vrnts = [];
-                    vrnts.push({
-                        id: variant_product.id,
-                        name: variant_product.display_name,
-                        quantity: selected_orderline.quantity,
-                        state: 'draft'
-                    });
-                    selected_orderline.set_variant_product(vrnts);                    
-                }
-                                
             }
-            var product_tmpl_id = product['product_tmpl_id'];         
-            if (product_tmpl_id && product_tmpl_id.length == undefined && (product['cross_selling'] || product['suggestion_sale'] || product['multi_variant'] || product['is_prop'])) {
-                
-                
-                // Prop Notes
-                var prop_notes = _.filter(this.pos.prop_notes, function (prop_note) {
-                    return prop_note['product_tmpl_id'][0] == product_tmpl_id;
-                });
-               
-                if (prop_notes.length) {                    
-                    var def_options = [];
-                    for (var i = 0; i < prop_notes.length; i++) {
-                        var prop_options = [];
-                        var prop_note = prop_notes[i];
-                        for (var j = 0; j < prop_note['prop_line'].length; j++) {
-                            var note = this.pos.prop_option_by_id[prop_note['prop_line'][j]];
-                            prop_options.push({
-		                        id: note.id,
-		                        name: note.name		                        
-		                    });
-		                    
-		                    if (prop_note.default_line[0] == note.id) {	                        
-		                        def_options.push({
-						            note_id: prop_note.id,
-						            note_name: prop_note.name,
-						            option_id: note.id,
-						            option_name: note.name,
-						        });
-			                }	
-			                
-                        }                        
-                        prop_notes[i]['prop_options'] = prop_options;
-                    }                    
-                    selected_orderline.prop_options = def_options;  
-                  
-                    this.pos.gui.show_popup('popup_prop_notes', {
-                        widget: this,
-                        title: product.display_name,
-                        selected_orderline: selected_orderline,
-                        prop_notes: prop_notes,                        
-                    });
-                }
-                
-                
-                // multi variant
-                var variant_items = _.filter(this.pos.variants, function (variant) {
-                    return variant['product_tmpl_id'][0] == product_tmpl_id;
-                });
-                if (variant_items.length) {
-                    this.pos.gui.show_popup('popup_selection_variants', {
-                        title: 'Select variants',
-                        variants: this.pos.variant_by_product_tmpl_id[selected_orderline.product.product_tmpl_id],
-                        selected_orderline: selected_orderline
-                    })
-                }
-                                
-                // cross selling
-                var cross_items = _.filter(this.pos.cross_items, function (cross_item) {
-                    return cross_item['product_tmpl_id'][0] == product_tmpl_id;
-                });
-                if (cross_items.length) {
-                    this.pos.gui.show_popup('popup_cross_selling', {
-                        widget: this,
-                        cross_items: cross_items
-                    });
-                }
-                var suggestion_items = _.filter(this.pos.suggestion_items, function (suggestion_item) {
-                    return suggestion_item['product_tmpl_id'][0] == product_tmpl_id;
-                });
-                var contents = $('.product-list-re-comment'); // sale suggestion
-                if (suggestion_items.length && contents) {
-                    contents.empty();
-                    contents.css({'display': 'table'})
-                    for (var i = 0; i < suggestion_items.length; i++) {
-                        var suggestion_product = this.pos.db.get_product_by_id(suggestion_items[i]['product_id'][0])
-                        if (suggestion_product) {
-                            var image_url = this.get_product_image_url(suggestion_product);
-                            var product_html = qweb.render('product_suggestion', {
-                                widget: this.pos.chrome,
-                                suggestion: suggestion_items[i],
-                                pricelist: this.pricelist || this.pos.default_pricelist,
-                                image_url: image_url
-                            });
-                            contents.append(product_html);
-                        }
+            if (selected_orderline && combo_items) {
+                selected_orderline['combo_items'] = combo_items;
+                var price_extra = 0;
+                for (var i = 0; i < combo_items.length; i++) {
+                    var combo_item = combo_items[i];
+                    if (combo_item['price_extra']) {
+                        price_extra += combo_item['price_extra'];
                     }
-                } else {
-                    contents.css({'display': 'none'})
                 }
+                if (price_extra) {
+                    selected_orderline.set_unit_price(selected_orderline.price + price_extra);
+                }
+                selected_orderline.trigger('change', selected_orderline);
+                selected_orderline.trigger('trigger_update_line', selected_orderline);
             }
-           
-            selected_orderline.set_quantity(selected_orderline.quantity,'keep price when add this item');
-            selected_orderline.trigger('change', selected_orderline);
-                        
+            var product_tmpl_id = product['product_tmpl_id'];
+            if (selected_orderline && product_tmpl_id && selected_orderline && product_tmpl_id.length == undefined && product['cross_selling']) {
+                selected_orderline.show_cross_sale();
+            }
+            if (selected_orderline && this.pos.variant_by_product_tmpl_id[selected_orderline.product.product_tmpl_id]) {
+                setTimeout(function () {
+                    self.pos.gui.show_popup('popup_select_variants', {
+                        variants: self.pos.variant_by_product_tmpl_id[selected_orderline.product.product_tmpl_id],
+                        selected_orderline: selected_orderline,
+                    });
+                }, 500)
+            }
             return res
         },
         validation_order_can_do_internal_transfer: function () {
@@ -833,882 +860,9 @@ odoo.define('pos_retail.order', function (require) {
             }
             return can_do;
         },
-        build_plus_point: function () { // auto compute loyalty point
-            var plus_point = 0;
-            var lines = this.orderlines.models;
-            if (lines.length == 0 || !lines) {
-                return plus_point;
-            }
-            var amount_total_included_tax = this.get_total_with_tax();
-            var loyalty_ids = this.pos.loyalty_ids;
-            if (!loyalty_ids) {
-                return plus_point;
-            }
-            var rules = [];
-            if (loyalty_ids.length > 0) {
-                for (var i = 0; i < loyalty_ids.length; i++) {
-                    var rules_by_loylaty_id = this.pos.rules_by_loyalty_id[loyalty_ids[i]]
-                    if (!rules_by_loylaty_id) {
-                        continue;
-                    }
-                    for (var j = 0; j < rules_by_loylaty_id.length; j++) {
-                        rules.push(rules_by_loylaty_id[j]);
-                    }
-                }
-            } else {
-                return plus_point;
-            }
-            if (!rules) {
-                return plus_point;
-            }
-            if (rules.length) {
-                for (var j = 0; j < lines.length; j++) {
-                    var line = lines[j];                    
-                    if (line['redeem_point'] || line['promotion']) {
-                        line['plus_point'] = 0;
-                        continue;
-                    }
-                    if (line['is_return']) {
-                        plus_point += line['plus_point'];
-                        continue;
-                    } else {
-                        line.plus_point = 0;
-                        for (var i = 0; i < rules.length; i++) {
-                            var rule = rules[i];
-                            if (!line.redeem_point || line.redeem_point == 0) {
-                                var plus = round_pr(line['price'] * line['quantity'] * rule['coefficient'], rule['rounding'])
-                                if (rule['type'] == 'products' && rule['product_ids'].indexOf(line.product['id']) != -1) {
-                                    line.plus_point += plus;
-                                    plus_point += plus;                                    
-                                } else if (rule['type'] == 'categories' && rule['category_ids'].indexOf(line.product.pos_categ_id[0]) != -1) {
-                                    line.plus_point += plus;
-                                    plus_point += plus;                                    
-                                } else if (rule['type'] == 'order_amount') {
-                                    var order_amount_by_rule_id = this.pos.order_amount_by_rule_id[rule['id']];
-                                    if (order_amount_by_rule_id.length > 0) {
-                                        var amount_temp = 0;
-                                        var order_amount_rule_apply = null;
-                                        for (var z = 0; z < order_amount_by_rule_id.length; z++) {
-                                            var current_order_rule = order_amount_by_rule_id[z];
-                                            if (current_order_rule['amount_from'] >= amount_temp && amount_total_included_tax >= current_order_rule['amount_from']) {
-                                                amount_temp = current_order_rule['amount_from'];
-                                                order_amount_rule_apply = current_order_rule;
-                                            }
-                                        }
-                                        if (order_amount_rule_apply) {
-                                            var point_plus = round_pr(order_amount_rule_apply['point'] / lines.length, rule['rounding'])
-                                            line.plus_point += point_plus;
-                                            plus_point += point_plus;
-                                            console.log('type order_amount + ' + point_plus + ' point ')
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                return plus_point;
-            }
-            return plus_point;
-        },
-        build_redeem_point: function () {
-            var redeem_point = 0;
-            var lines = this.orderlines.models;
-            if (lines.length == 0 || !lines) {
-                return redeem_point;
-            }
-            for (var i = 0; i < lines.length; i++) {
-                if (lines[i].redeem_point > 0) {
-                    redeem_point += lines[i].redeem_point;
-                }
-            }
-            return redeem_point;
-        },
-        get_total_before_tax: function() {
-		    return this.get_total_without_tax() + this.get_order_discount();
-		},
-		get_order_discount: function() {
-			return round_pr(this.orderlines.reduce((function(sum, orderLine) {
-				if (orderLine.get_product().display_name == 'Discount Product')
-					return sum + Math.abs(orderLine.get_price_without_tax());
-				else
-				    return sum;
-			}), 0), this.pos.currency.rounding);
-		},
-        get_total_without_promotion_and_tax: function () {
-            var rounding = this.pos.currency.rounding;
-            var orderlines = this.orderlines.models
-            var sum = 0
-            var i = 0
-            while (i < orderlines.length) {
-                var line = orderlines[i];
-                if (line.promotion && line.promotion == true) {
-                    i++;
-                    continue
-                }
-                sum += round_pr(line.get_unit_price() * line.get_quantity() * (1 - line.get_discount() / 100), rounding)
-                i++
-            }
-            return sum;
-        },
-        compute_promotion: function () {
-            var self = this;
-            var promotions = this.pos.promotions
-            if (promotions) {
-                this.remove_all_promotion_line();
-                for (var i = 0; i < promotions.length; i++) {
-                    var type = promotions[i].type
-                    var order = this;
-                    if (order.orderlines.length) {
-                        if (type == '1_discount_total_order') { // discount filter by total of current order
-                            order.compute_discount_total_order(promotions[i]);
-                        }
-                        if (type == '2_discount_category') { // discount by category
-                            order.compute_discount_category(promotions[i]);
-                        }
-                        if (type == '3_discount_by_quantity_of_product') { // discount by quantity of product
-                            order.compute_discount_by_quantity_of_products(promotions[i]);
-                        }
-                        if (type == '4_pack_discount') { // discount by pack
-                            order.compute_pack_discount(promotions[i]);
-                        }
-                        if (type == '5_pack_free_gift') { // free items filter by pack
-                            order.compute_pack_free_gift(promotions[i]);
-                        }
-                        if (type == '6_price_filter_quantity') { // re-build price filter by quantity of product
-                            order.compute_price_filter_quantity(promotions[i]);
-                        }
-                        if (type == '7_special_category') {
-                            order.compute_special_category(promotions[i]);
-                        }
-                        if (type == '8_discount_lowest_price') {
-                            order.compute_discount_lowest_price(promotions[i]);
-                        }
-                        if (type == '9_multi_buy') {
-                            order.compute_multi_buy(promotions[i]);
-                        }
-                    }
-                }
-                var applied_promotion = false;
-                for (var i = 0; i < this.orderlines.models.length; i++) {
-                    if (this.orderlines.models[i]['promotion'] == true) {
-                        applied_promotion = true;
-                        break;
-                    }
-                }
-                if (applied_promotion == false) {
-                    return this.pos.gui.show_popup('confirm', {
-                        title: 'Warning',
-                        body: 'Have not any promotion applied',
-                    });
-                }
-            }
-        },
-        remove_all_promotion_line: function () {
-            var lines = this.orderlines.models;
-            for (var i = 0; i < lines.length; i++) {
-                var line = lines[i];
-                if (line['promotion'] || line['promotion_discount_total_order'] || line['promotion_discount_category'] || line['promotion_discount_by_quantity'] || line['promotion_discount'] || line['promotion_gift'] || line['promotion_price_by_quantity']) {
-                    this.remove_orderline(line);
-                }
-            }
-            for (var i = 0; i < lines.length; i++) {
-                var line = lines[i];
-                if (line['promotion'] || line['promotion_discount_total_order'] || line['promotion_discount_category'] || line['promotion_discount_by_quantity'] || line['promotion_discount'] || line['promotion_gift'] || line['promotion_price_by_quantity']) {
-                    this.remove_orderline(line);
-                }
-            }
-        },
-        product_quantity_by_product_id: function () {
-            var lines_list = {};
-            var lines = this.orderlines.models;
-            var i = 0;
-            while (i < lines.length) {
-                var line = lines[i];
-                if (line.promotion) {
-                    i++;
-                    continue
-                }
-                if (!lines_list[line.product.id]) {
-                    lines_list[line.product.id] = line.quantity;
-                } else {
-                    lines_list[line.product.id] += line.quantity;
-                }
-                i++;
-            }
-            return lines_list
-        },
-        // 1) check current order can apply discount by total order
-        checking_apply_total_order: function (promotion) {
-            var discount_lines = this.pos.promotion_discount_order_by_promotion_id[promotion.id];
-            var total_order = this.get_total_without_promotion_and_tax();
-            var discount_line_tmp = null;
-            var discount_tmp = 0;
-            if (discount_lines) {
-                var i = 0;
-                while (i < discount_lines.length) {
-                    var discount_line = discount_lines[i];
-                    if (total_order >= discount_line.minimum_amount && total_order >= discount_tmp) {
-                        discount_line_tmp = discount_line;
-                        discount_tmp = discount_line.minimum_amount
-                    }
-                    i++;
-                }
-            }
-            return discount_line_tmp;
-        },
-        // 2) check current order can apply discount by categories
-        checking_can_discount_by_categories: function (promotion) {
-            var can_apply = false
-            var product = this.pos.db.get_product_by_id(promotion.product_id[0]);
-            if (!product || !this.pos.promotion_by_category_id) {
-                return false;
-            }
-            for (var i in this.pos.promotion_by_category_id) {
-                var promotion_line = this.pos.promotion_by_category_id[i];
-                var amount_total_by_category = 0;
-                var z = 0;
-                var lines = this.orderlines.models;
-                while (z < lines.length) {
-                    if (!lines[z].product.pos_categ_id) {
-                        z++;
-                        continue;
-                    }
-                    if (lines[z].product.pos_categ_id[0] == promotion_line.category_id[0]) {
-                        amount_total_by_category += lines[z].get_price_without_tax();
-                    }
-                    z++;
-                }
-                if (amount_total_by_category > 0) {
-                    can_apply = true
-                }
-            }
-            return can_apply
-        },
-        // 3) check condition for apply discount by quantity product
-        checking_apply_discount_filter_by_quantity_of_product: function (promotion) {
-            var can_apply = false;
-            var rules = this.pos.promotion_quantity_by_product_id;
-            var product_quantity_by_product_id = this.product_quantity_by_product_id();
-            for (var product_id in product_quantity_by_product_id) {
-                var rules_by_product_id = rules[product_id];
-                if (rules_by_product_id) {
-                    for (var i = 0; i < rules_by_product_id.length; i++) {
-                        var rule = rules_by_product_id[i];
-                        if (rule && product_quantity_by_product_id[product_id] >= rule.quantity) {
-                            can_apply = true;
-                        }
-                    }
-                }
-            }
-            return can_apply;
-        },
-        // 4 & 5 : check pack free gift and pack discount product
-        checking_pack_discount_and_pack_free_gift: function (rules) {
-            var can_apply = true;
-            var product_quantity_by_product_id = this.product_quantity_by_product_id();
-            for (var i = 0; i < rules.length; i++) {
-                var rule = rules[i];
-                var product_id = parseInt(rule.product_id[0]);
-                var minimum_quantity = rule.minimum_quantity;
-                if (!product_quantity_by_product_id[product_id] || product_quantity_by_product_id[product_id] < minimum_quantity) {
-                    can_apply = false;
-                }
-            }
-            return can_apply
-        },
-        // 6. check condition for apply price filter by quantity of product
-        checking_apply_price_filter_by_quantity_of_product: function (promotion) {
-            var condition = false;
-            var rules = this.pos.promotion_price_by_promotion_id[promotion.id];
-            var product_quantity_by_product_id = this.product_quantity_by_product_id();
-            for (var i = 0; i < rules.length; i++) {
-                var rule = rules[i];
-                if (rule && product_quantity_by_product_id[rule.product_id[0]] && product_quantity_by_product_id[rule.product_id[0]] >= rule.minimum_quantity) {
-                    condition = true;
-                }
-            }
-            return condition;
-        },
-        // 7. checking promotion special category
-        checking_apply_specical_category: function (promotion) {
-            var condition = false;
-            var promotion_lines = this.pos.promotion_special_category_by_promotion_id[promotion['id']];
-            this.lines_by_category_id = {};
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                var pos_categ_id = line['product']['pos_categ_id'][0]
-                if (pos_categ_id) {
-                    if (!this.lines_by_category_id[pos_categ_id]) {
-                        this.lines_by_category_id[pos_categ_id] = [line]
-                    } else {
-                        this.lines_by_category_id[pos_categ_id].push(line)
-                    }
-                }
-            }
-            for (var i = 0; i < promotion_lines.length; i++) {
-                var promotion_line = promotion_lines[i];
-                var categ_id = promotion_line['category_id'][0];
-                var total_quantity = 0;
-
-                if (this.lines_by_category_id[categ_id]) {
-                    var total_quantity = 0;
-                    for (var i = 0; i < this.lines_by_category_id[categ_id].length; i++) {
-                        total_quantity += this.lines_by_category_id[categ_id][i]['quantity']
-                    }
-                    if (promotion_line['count'] <= total_quantity) {
-                        condition = true;
-                    }
-                }
-            }
-            return condition;
-        },
-        // 9. checking multi buy
-        checking_multi_by: function (promotion) {
-            var condition = false;
-            var rule_applied = false;
-            var total_qty_by_product = {};
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                if (!total_qty_by_product[line.product.id]) {
-                    total_qty_by_product[line.product.id] = line.quantity;
-                } else {
-                    total_qty_by_product[line.product.id] += line.quantity;
-                }
-            }
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                var product_id = line.product.id;
-                var rules = this.pos.multi_buy_by_product_id[product_id];
-                if (rules) {
-                    for (var i=0; i < rules.length; i ++) {
-                        var rule = rules[i];
-                        if (!rule_applied[rule['product_id'][0]] && rule['quantity_of_by'] <= total_qty_by_product[rule['product_id'][0]]) {
-                            rule_applied[rule['product_id'][0]] = rule;
-                            condition = true;
-                        }
-                        if (rule_applied[rule['product_id'][0]]) {
-                            var old_rule = rule_applied[rule['product_id'][0]];
-                            var new_rule = rule;
-                            if (rule['quantity_of_by'] <= total_qty_by_product[rule['product_id'][0]] && new_rule['quantity_of_by'] >= old_rule['quantity_of_by']) {
-                                rule_applied[rule['product_id'][0]] = new_rule;
-                                condition = true;
-                            }
-                        }
-                    }
-                }
-            }
-            return condition;
-        },
-        // 1. compute promotion discount
-        compute_discount_total_order: function (promotion) { // 1. compute discount filter by total order
-            var discount_line_tmp = this.checking_apply_total_order(promotion)
-            if (discount_line_tmp == null) {
-                return false;
-            }
-            var total_order = this.get_total_without_promotion_and_tax();
-            if (discount_line_tmp && total_order > 0) {
-                var product = this.pos.db.get_product_by_id(promotion.product_id[0]);
-                var price = -total_order / 100 * discount_line_tmp.discount
-                if (product && price != 0) {
-                    var options = {};
-                    options.promotion_discount_total_order = true;
-                    options.promotion = true;
-                    options.promotion_reason = 'discount ' + discount_line_tmp.discount + ' % ' + ' because total order greater or equal ' + discount_line_tmp.minimum_amount;
-                    this.add_promotion(product, price, 1, options)
-                }
-            }
-        },
-        // 2. compute promotion discount by category
-        compute_discount_category: function (promotion) { // 2. compute discount filter by product categories
-            var product = this.pos.db.get_product_by_id(promotion.product_id[0]);
-            if (!product || !this.pos.promotion_by_category_id) {
-                return false;
-            }
-            var can_apply = this.checking_can_discount_by_categories(promotion);
-            if (can_apply == false) {
-                return false;
-            }
-            for (var i in this.pos.promotion_by_category_id) {
-                var promotion_line = this.pos.promotion_by_category_id[i];
-                var amount_total_by_category = 0;
-                var z = 0;
-                var lines = this.orderlines.models;
-                while (z < lines.length) {
-                    if (!lines[z].product.pos_categ_id) {
-                        z++;
-                        continue;
-                    }
-                    if (lines[z].product.pos_categ_id[0] == promotion_line.category_id[0]) {
-                        amount_total_by_category += lines[z].get_price_without_tax();
-                    }
-                    z++;
-                }
-                if (amount_total_by_category > 0) {
-                    var price = -amount_total_by_category / 100 * promotion_line.discount
-                    var options = {};
-                    options.promotion_discount_category = true;
-                    options.promotion = true;
-                    options.promotion_reason = ' discount ' + promotion_line.discount + ' % from ' + promotion_line.category_id[1];
-                    this.add_promotion(product, price, 1, options)
-                }
-            }
-        },
-        // 3. compute discount filter by quantity of product
-        compute_discount_by_quantity_of_products: function (promotion) {
-            var check = this.checking_apply_discount_filter_by_quantity_of_product(promotion)
-            if (check == false) {
-                return;
-            }
-            var quantity_by_product_id = {}
-            var product = this.pos.db.get_product_by_id(promotion.product_id[0]);
-            var i = 0;
-            var lines = this.orderlines.models;
-            while (i < lines.length) {
-                var line = lines[i];
-                if (!quantity_by_product_id[line.product.id]) {
-                    quantity_by_product_id[line.product.id] = line.quantity;
-                } else {
-                    quantity_by_product_id[line.product.id] += line.quantity;
-                }
-                i++;
-            }
-            for (i in quantity_by_product_id) {
-                var product_id = i;
-                var promotion_lines = this.pos.promotion_quantity_by_product_id[product_id];
-                if (!promotion_lines) {
-                    continue;
-                }
-                var quantity_tmp = 0;
-                var promotion_line = null;
-                var j = 0;
-                for (j in promotion_lines) {
-                    if (quantity_tmp <= promotion_lines[j].quantity && quantity_by_product_id[i] >= promotion_lines[j].quantity) {
-                        promotion_line = promotion_lines[j];
-                        quantity_tmp = promotion_lines[j].quantity
-                    }
-                }
-                var lines = this.orderlines.models;
-                var amount_total_by_product = 0;
-                if (lines.length) {
-                    var x = 0;
-                    while (x < lines.length) {
-                        if (lines[x].promotion) {
-                            x++;
-                            continue
-                        }
-                        if (lines[x].promotion_discount_by_quantity) {
-                            this.remove_orderline(lines[x]);
-                        }
-                        if (lines[x].product.id == product_id && lines[x].promotion != true) {
-                            amount_total_by_product += lines[x].get_price_without_tax()
-                        }
-                        x++;
-                    }
-                }
-                if (amount_total_by_product > 0 && promotion_line) {
-                    var price = -amount_total_by_product / 100 * promotion_line.discount
-                    var options = {};
-                    options.promotion_discount_by_quantity = true;
-                    options.promotion = true;
-                    options.promotion_reason = ' discount ' + promotion_line.discount + ' % when ' + promotion_line.product_id[1] + ' have quantity greater or equal ' + promotion_line.quantity;
-                    this.add_promotion(product, price, 1, options)
-                }
-            }
-        },
-
-        // 4. compute discount product filter by pack items
-        compute_pack_discount: function (promotion) {
-            var promotion_condition_items = this.pos.promotion_discount_condition_by_promotion_id[promotion.id];
-            var product = this.pos.db.get_product_by_id(promotion.product_id[0]);
-            var check = this.checking_pack_discount_and_pack_free_gift(promotion_condition_items);
-            if (check == true) {
-                var discount_items = this.pos.promotion_discount_apply_by_promotion_id[promotion.id]
-                if (!discount_items) {
-                    return;
-                }
-                var i = 0;
-                while (i < discount_items.length) {
-                    var discount_item = discount_items[i];
-                    var discount = 0;
-                    var lines = this.orderlines.models;
-                    for (var x = 0; x < lines.length; x++) {
-                        if (lines[x].promotion) {
-                            continue;
-                        }
-                        if (lines[x].product.id == discount_item.product_id[0]) {
-                            discount += lines[x].get_price_without_tax()
-                        }
-                    }
-                    if (product && discount > 0) {
-                        var price = -discount / 100 * discount_item.discount
-                        var options = {};
-                        options.promotion_discount = true;
-                        options.promotion = true;
-                        options.promotion_reason = 'discount ' + discount_item.product_id[1] + ' ' + discount_item.discount + ' % of Pack name: ' + promotion.name;
-                        this.add_promotion(product, price, 1, options)
-                    }
-                    i++;
-                }
-            }
-        },
-        // get total quantity by product on order lines
-        count_quantity_by_product: function (product) {
-            var qty = 0;
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                if (line.product['id'] == product['id']) {
-                    qty += line['quantity'];
-                }
-            }
-            return qty;
-        },
-
-        // 5. compute gift products filter by pack items
-        compute_pack_free_gift: function (promotion) {
-            var promotion_condition_items = this.pos.promotion_gift_condition_by_promotion_id[promotion.id];
-            var check = this.checking_pack_discount_and_pack_free_gift(promotion_condition_items);
-            if (check == true) {
-                var gifts = this.pos.promotion_gift_free_by_promotion_id[promotion.id]
-                if (!gifts) {
-                    return;
-                }
-                var products_condition = {};
-                for (var i = 0; i < promotion_condition_items.length; i++) {
-                    var condition = promotion_condition_items[i];
-                    var product = this.pos.db.get_product_by_id(condition.product_id[0]);
-                    products_condition[product['id']] = this.count_quantity_by_product(product)
-                }
-                var can_continue = true;
-                var temp = 1;
-                for (var i = 1; i < 100; i++) {
-                    for (var j = 0; j < promotion_condition_items.length; j++) {
-                        var condition = promotion_condition_items[j];
-                        var condition_qty = condition.minimum_quantity;
-                        var product = this.pos.db.get_product_by_id(condition.product_id[0]);
-                        var total_qty = this.count_quantity_by_product(product);
-                        if (i * condition_qty <= total_qty) {
-                            can_continue = true;
-                        } else {
-                            can_continue = false
-                        }
-                    }
-                    if (can_continue == true) {
-                        temp = i;
-                    } else {
-                        break;
-                    }
-                }
-                var i = 0;
-                while (i < gifts.length) {
-                    var product = this.pos.db.get_product_by_id(gifts[i].product_id[0]);
-                    if (product) {
-                        var quantity = gifts[i].quantity_free * temp;
-                        var options = {};
-                        options.promotion_gift = true;
-                        options.promotion = true;
-                        options.promotion_reason = 'Free ' + quantity + ' ' + product['display_name'] + ' because [' + promotion.name + '] active';
-                        this.add_promotion(product, 0, quantity, options)
-                    }
-                    i++;
-                }
-            }
-        },
-        // 6. compute and reset price of line filter by rule: price filter by quantity of product
-        compute_price_filter_quantity: function (promotion) {
-            var promotion_prices = this.pos.promotion_price_by_promotion_id[promotion.id]
-            var product = this.pos.db.get_product_by_id(promotion.product_id[0]);
-            if (promotion_prices) {
-                var prices_item_by_product_id = {};
-                for (var i = 0; i < promotion_prices.length; i++) {
-                    var item = promotion_prices[i];
-                    if (!prices_item_by_product_id[item.product_id[0]]) {
-                        prices_item_by_product_id[item.product_id[0]] = [item]
-                    } else {
-                        prices_item_by_product_id[item.product_id[0]].push(item)
-                    }
-                }
-                var quantity_by_product_id = this.product_quantity_by_product_id()
-                var discount = 0;
-                for (i in quantity_by_product_id) {
-                    if (prices_item_by_product_id[i]) {
-                        var quantity_tmp = 0
-                        var price_item_tmp = null
-                        // root: quantity line, we'll compare this with 2 variable quantity line greater minimum quantity of item and greater quantity temp
-                        for (var j = 0; j < prices_item_by_product_id[i].length; j++) {
-                            var price_item = prices_item_by_product_id[i][j];
-                            if (quantity_by_product_id[i] >= price_item.minimum_quantity && quantity_by_product_id[i] >= quantity_tmp) {
-                                quantity_tmp = price_item.minimum_quantity;
-                                price_item_tmp = price_item;
-                            }
-                        }
-                        if (price_item_tmp) {
-                            var discount = 0;
-                            var z = 0;
-                            while (z < lines.length) {
-                                var line = lines[z];
-                                if (line.product.id == price_item_tmp.product_id[0]) {
-                                    discount += line.get_price_without_tax() - (line.quantity * price_item_tmp.list_price)
-                                }
-                                z++;
-                            }
-                            if (discount > 0) {
-                                var price = -discount;
-                                var options = {};
-                                options.promotion_price_by_quantity = true;
-                                options.promotion = true;
-                                options.promotion_reason = ' By greater or equal ' + price_item_tmp.minimum_quantity + ' ' + price_item_tmp.product_id[1] + ' applied price ' + price_item_tmp.list_price
-                                this.add_promotion(product, price, 1, options)
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        // 7. compute promotion filter by special category
-        compute_special_category: function (promotion) {
-            var product_service = this.pos.db.product_by_id[promotion['product_id'][0]];
-            var promotion_lines = this.pos.promotion_special_category_by_promotion_id[promotion['id']];
-            this.lines_by_category_id = {};
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                if (line.promotion) {
-                    continue;
-                }
-                var pos_categ_id = line['product']['pos_categ_id'][0]
-                if (pos_categ_id) {
-                    if (!this.lines_by_category_id[pos_categ_id]) {
-                        this.lines_by_category_id[pos_categ_id] = [line]
-                    } else {
-                        this.lines_by_category_id[pos_categ_id].push(line)
-                    }
-                }
-            }
-            for (var i = 0; i < promotion_lines.length; i++) {
-                var promotion_line = promotion_lines[i];
-                var categ_id = promotion_line['category_id'][0];
-                if (this.lines_by_category_id[categ_id]) {
-                    var total_quantity = 0;
-                    for (var i = 0; i < this.lines_by_category_id[categ_id].length; i++) {
-                        total_quantity += this.lines_by_category_id[categ_id][i]['quantity']
-                    }
-                    if (promotion_line['count'] <= total_quantity) {
-                        var promotion_type = promotion_line['type'];
-                        if (promotion_type == 'discount') {
-                            var discount = 0;
-                            var quantity = 0;
-                            var lines = this.lines_by_category_id[categ_id];
-                            for (var j = 0; j < lines.length; j++) {
-                                quantity += lines[j]['quantity'];
-                                if (quantity >= promotion_line['count']) {
-                                    discount += lines[j].get_price_without_tax() / 100 / lines[j]['quantity'] * promotion_line['discount']
-                                }
-                            }
-                            if (discount > 0) {
-                                this.add_promotion(product_service, -discount, 1, {
-                                    promotion: true,
-                                    promotion_special_category: true,
-                                    promotion_reason: 'By bigger than or equal ' + promotion_line['count'] + ' product of ' + promotion_line['category_id'][1] + ' discount ' + promotion_line['discount'] + ' %'
-                                })
-                            }
-                        }
-                        if (promotion_type == 'free') {
-                            var product_free = this.pos.db.product_by_id[promotion_line['product_id'][0]];
-                            if (product_free) {
-                                this.add_promotion(product_free, 0, promotion_line['qty_free'], {
-                                    promotion: true,
-                                    promotion_special_category: true,
-                                    promotion_reason: 'By bigger than or equal ' + promotion_line['count'] + ' product of ' + promotion_line['category_id'][1] + ' free ' + promotion_line['qty_free'] + ' ' + product_free['display_name']
-                                })
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        compute_discount_lowest_price: function (promotion) { // compute discount lowest price
-            var orderlines = this.orderlines.models;
-            var line_apply = null;
-            for (var i = 0; i < orderlines.length; i++) {
-                var line = orderlines[i];
-                if (!line_apply) {
-                    line_apply = line
-                } else {
-                    if (line.get_price_with_tax() < line_apply.get_price_with_tax()) {
-                        line_apply = line;
-                    }
-                }
-            }
-            var product_discount = this.pos.db.product_by_id[promotion.product_id[0]];
-            if (product_discount) {
-                this.add_promotion(product_discount, line_apply.get_price_with_tax(), -1, {
-                    promotion: true,
-                    promotion_discount_lowest_price: true,
-                    promotion_reason: 'Discount ' + promotion.discount_lowest_price + ' % on product ' + line_apply.product.display_name + ', from promotion ' + promotion.name
-                })
-            }
-        },
-        compute_multi_buy: function (promotion) { // compute multi by
-            var rule_applied = {};
-            var total_qty_by_product = {};
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                if (!total_qty_by_product[line.product.id]) {
-                    total_qty_by_product[line.product.id] = line.quantity;
-                } else {
-                    total_qty_by_product[line.product.id] += line.quantity;
-                }
-            }
-            for (var i = 0; i < this.orderlines.models.length; i++) {
-                var line = this.orderlines.models[i];
-                var product_id = line.product.id;
-                var rules = this.pos.multi_buy_by_product_id[product_id];
-                if (rules) {
-                    for (var i=0; i < rules.length; i ++) {
-                        var rule = rules[i];
-                        if (!rule_applied[rule['product_id'][0]] && rule['quantity_of_by'] <= total_qty_by_product[rule['product_id'][0]]) {
-                            rule_applied[rule['product_id'][0]] = rule;
-                        }
-                        if (rule_applied[rule['product_id'][0]]) {
-                            var old_rule = rule_applied[rule['product_id'][0]];
-                            var new_rule = rule;
-                            if (rule['quantity_of_by'] <= total_qty_by_product[rule['product_id'][0]] && new_rule['quantity_of_by'] >= old_rule['quantity_of_by']) {
-                                rule_applied[rule['product_id'][0]] = new_rule;
-                            }
-                        }
-                    }
-                }
-            }
-            var product_discount = this.pos.db.product_by_id[promotion.product_id[0]];
-            if (rule_applied && product_discount) {
-                for (var product_id in rule_applied) {
-                    var product = this.pos.db.get_product_by_id(product_id);
-                    var quantity_promotion = rule_applied[product_id]['quantity_promotion'];
-                    var price_promotion = rule_applied[product_id]['price_promotion'];
-                    var total_qty = 0;
-                    for (var i = 0; i < this.orderlines.models.length; i++) {
-                        var line = this.orderlines.models[i];
-                        if (line.product.id == product.id) {
-                            total_qty += line.quantity
-                        }
-                    }
-                    var qty_not_apply = total_qty - quantity_promotion;
-                    var price_end = product['price'] * qty_not_apply + quantity_promotion * price_promotion;
-                    var total_price_discount = product['price'] * total_qty - price_end;
-                    this.add_promotion(product_discount, total_price_discount, -1, {
-                        promotion: true,
-                        promotion_multi_buy: true,
-                        promotion_reason: 'By ' + quantity_promotion + ' ' + product['display_name'] + ' for price ' + price_promotion
-                    })
-                }
-            }
-        },
-        // add promotion to current order
-        add_promotion: function (product, price, quantity, options) {
-            var line = new models.Orderline({}, {pos: this.pos, order: this, product: product});
-            if (options.promotion) {
-                line.promotion = options.promotion;
-            }
-            if (options.promotion_reason) {
-                line.promotion_reason = options.promotion_reason;
-            }
-            if (options.promotion_discount_total_order) {
-                line.promotion_discount_total_order = options.promotion_discount_total_order;
-            }
-            if (options.promotion_discount_category) {
-                line.promotion_discount_category = options.promotion_discount_category;
-            }
-            if (options.promotion_discount_by_quantity) {
-                line.promotion_discount_by_quantity = options.promotion_discount_by_quantity;
-            }
-            if (options.promotion_discount) {
-                line.promotion_discount = options.promotion_discount;
-            }
-            if (options.promotion_gift) {
-                line.promotion_gift = options.promotion_gift;
-            }
-            if (options.promotion_price_by_quantity) {
-                line.promotion_price_by_quantity = options.promotion_price_by_quantity;
-            }
-            if (options.promotion_special_category) {
-                line.promotion_special_category = options.promotion_special_category;
-            }
-            if (options.promotion_discount_lowest_price) {
-                line.promotion_discount_lowest_price = options.promotion_discount_lowest_price;
-            }
-            line.price_manually_set = true; // no need pricelist change, price of promotion change the same, i blocked
-            line.set_quantity(quantity);
-            line.set_unit_price(price);
-            this.orderlines.add(line);
-            this.trigger('change', this);
-        },
-        current_order_can_apply_promotion: function () {
-            var can_apply = null;
-            var promotions_apply = []
-            if (!this.pos.promotions) {
-                return {
-                    can_apply: can_apply,
-                    promotions_apply: []
-                };
-            }
-            for (var i = 0; i < this.pos.promotions.length; i++) {
-                var promotion = this.pos.promotions[i];
-                if (promotion['type'] == '1_discount_total_order' && this.checking_apply_total_order(promotion)) {
-                    can_apply = true;
-                    promotions_apply.push(promotion);
-                }
-                else if (promotion['type'] == '2_discount_category' && this.checking_can_discount_by_categories(promotion)) {
-                    can_apply = true;
-                    promotions_apply.push(promotion);
-                }
-                else if (promotion['type'] == '3_discount_by_quantity_of_product' && this.checking_apply_discount_filter_by_quantity_of_product(promotion)) {
-                    can_apply = true;
-                    promotions_apply.push(promotion);
-                }
-                else if (promotion['type'] == '4_pack_discount') {
-                    var promotion_condition_items = this.pos.promotion_discount_condition_by_promotion_id[promotion.id];
-                    var check = this.checking_pack_discount_and_pack_free_gift(promotion_condition_items);
-                    if (check) {
-                        can_apply = true;
-                        promotions_apply.push(promotion);
-                    }
-                }
-                else if (promotion['type'] == '5_pack_free_gift') {
-                    var promotion_condition_items = this.pos.promotion_gift_condition_by_promotion_id[promotion.id];
-                    var check = this.checking_pack_discount_and_pack_free_gift(promotion_condition_items);
-                    if (check) {
-                        can_apply = true;
-                        promotions_apply.push(promotion);
-                    }
-                }
-                else if (promotion['type'] == '6_price_filter_quantity' && this.checking_apply_price_filter_by_quantity_of_product(promotion)) {
-                    can_apply = true;
-                    promotions_apply.push(promotion);
-                }
-                else if (promotion['type'] == '7_special_category' && this.checking_apply_specical_category(promotion)) {
-                    can_apply = true;
-                    promotions_apply.push(promotion);
-                }
-                else if (promotion['type'] == '8_discount_lowest_price') {
-                    can_apply = true;
-                    promotions_apply.push(promotion);
-                }
-                else if (promotion['type'] == '9_multi_buy') {
-                    can_apply = this.checking_multi_by(promotion);
-                    if (can_apply) {
-                        promotions_apply.push(promotion);
-                    }
-                }
-            }
-            return {
-                can_apply: can_apply,
-                promotions_apply: promotions_apply
-            };
-        },
         // set prices list to order
         // this method only use for version 10
-        set_pricelist_to_order: function (pricelist) {
+        set_pricelist_to_order: function (pricelist) { // v10 only
             var self = this;
             if (!pricelist) {
                 return;
@@ -1716,9 +870,11 @@ odoo.define('pos_retail.order', function (require) {
             this.pricelist = pricelist;
             // change price of current order lines
             _.each(this.get_orderlines(), function (line) {
-                var price = self.pos.db.compute_price(line['product'], pricelist, line.quantity);
-                line['product']['price'] = price;
-                line.set_unit_price(price);
+                if (line['product']) {
+                    var price = self.pos.get_price(line['product'], pricelist, line.quantity);
+                    line['product']['price'] = price;
+                    line.set_unit_price(price);
+                }
             });
             // after update order lines price
             // will update screen product and with new price
@@ -1727,19 +883,16 @@ odoo.define('pos_retail.order', function (require) {
         },
         update_product_price: function (pricelist) {
             var self = this;
-            var products = this.pos.products;
+            var products = this.pos.db.get_product_by_category(0);
+            if (!products) {
+                return;
+            }
             for (var i = 0; i < products.length; i++) {
                 var product = products[i];
-                var price = this.pos.db.compute_price(product, pricelist, 1);
+                var price = this.pos.get_price(product, pricelist, 1);
                 product['price'] = price;
             }
             self.pos.trigger('product:change_price_list', products)
-        },
-        set_to_add_credit: function (add_credit) {
-            this.add_credit = add_credit;
-        },
-        is_add_credit: function () {
-            return this.add_credit || false;
         }
     });
 
@@ -1747,41 +900,50 @@ odoo.define('pos_retail.order', function (require) {
     models.Orderline = models.Orderline.extend({
         initialize: function (attributes, options) {
             var res = _super_Orderline.initialize.apply(this, arguments);
-            this.combo_items = this.combo_items || [];
-            this.note = this.note || "";
-            this.tags = this.tags || [];
-            this.prop_options = this.prop_options || [];
-            this.variants = this.variants || [];
-            this.variant_products = this.variant_products || [];
-            this.plus_point = this.plus_point || 0;
-            this.redeem_point = this.redeem_point || 0;
+            if (!options.json) {
+                // TODO: if sync between session active auto set seller is user assigned
+                if (this.pos.config.sync_multi_session && this.pos.config.user_id) {
+                    var seller = this.pos.user_by_id[this.pos.config.user_id[0]];
+                    if (seller) {
+                        this.set_sale_person(seller)
+                    }
+                }
+                // TODO: if default seller auto set user_id for pos_order_line
+                if (this.pos.default_seller) {
+                    this.set_sale_person(this.pos.default_seller)
+                }
+                this.selected_combo_items = {};
+            }
             return res;
         },
         init_from_JSON: function (json) {
             var res = _super_Orderline.init_from_JSON.apply(this, arguments);
             if (json.user_id) {
-                var user = this.pos.user_by_id[json.user_id];
-                if (user) {
-                    this.set_sale_person(user)
+                var seller = this.pos.user_by_id[json.user_id];
+                if (seller) {
+                    this.set_sale_person(seller)
                 }
             }
             if (json.tag_ids && json.tag_ids.length) {
-                this.tags = [];
                 var tag_ids = json.tag_ids[0][2];
-                for (var i = 0; i < tag_ids.length; i++) {
-                    var tag_id = tag_ids[i];
-                    var tag = this.pos.tag_by_id[tag_id];
-                    this.tags.push(tag);
+                if (tag_ids) {
+                    this.set_tags(tag_ids)
                 }
             }
             if (json.is_return) {
                 this.is_return = json.is_return;
             }
-            if (json.plus_point) {
-                this.plus_point = json.plus_point;
+            if (json.combo_item_ids && json.combo_item_ids.length) {
+                var combo_item_ids = json.combo_item_ids[0][2];
+                if (combo_item_ids) {
+                    this.set_combo_items(combo_item_ids)
+                }
             }
-            if (json.redeem_point) {
-                this.redeem_point = json.redeem_point;
+            if (json.variant_ids && json.variant_ids.length) {
+                var variant_ids = json.variant_ids[0][2];
+                if (variant_ids) {
+                    this.set_variants(variant_ids)
+                }
             }
             if (json.uom_id) {
                 this.uom_id = json.uom_id;
@@ -1790,153 +952,153 @@ odoo.define('pos_retail.order', function (require) {
                     this.product.uom_id = [unit['id'], unit['name']];
                 }
             }
-            if (json.note) {
-               this.note = this.set_line_note(json.note);
-            }
-            if (json.variants) {
-                this.variants = json.variants;
-            }
-            if (json.prop_options) {
-                this.prop_options = json.prop_options;
-            }
-           
-            if (json.variant_products) {                
-                this.variant_products = json.variant_products;   // this.set_variant_product(json.variant_products);
-            }
-            if (json.combo_items) {
-                this.combo_items = json.combo_items;
-            }
-            if (json.promotion) {
-                this.promotion = json.promotion;
-            }
-            if (json.promotion_reason) {
-                this.promotion_reason = json.promotion_reason;
-            }
-            if (json.promotion_discount_total_order) {
-                this.promotion_discount_total_order = json.promotion_discount_total_order;
-            }
-            if (json.promotion_discount_category) {
-                this.promotion_discount_category = json.promotion_discount_category;
-            }
-            if (json.promotion_discount_by_quantity) {
-                this.promotion_discount_by_quantity = json.promotion_discount_by_quantity;
-            }
-            if (json.promotion_gift) {
-                this.promotion_gift = json.promotion_gift;
-            }
-            if (json.promotion_discount) {
-                this.promotion_discount = json.promotion_discount;
-            }
-            if (json.promotion_price_by_quantity) {
-                this.promotion_price_by_quantity = json.promotion_price_by_quantity;
+            if (this.note) {
+                this.note = this.set_line_note(json.note);
             }
             if (json.discount_reason) {
-                this.discount_reason = json.discount_reason;
+                this.discount_reason = json.discount_reason
+            }
+            if (json.medical_insurance) {
+                this.medical_insurance = json.medical_insurance;
+            }
+            if (json.frequent_buyer_id) {
+                this.frequent_buyer_id = json.frequent_buyer_id;
+            }
+            if (json.packaging_id && this.pos.packaging_by_id) {
+                this.packaging = this.pos.packaging_by_id[json.packaging_id];
+            }
+            if (json.lot_ids) {
+                this.lot_ids = json.lot_ids;
+            }
+            if (json.manager_user_id) {
+                this.manager_user = this.pos.user_by_id[json.manager_user_id]
+            }
+            if (json.pos_branch_id) {
+                this.pos_branch_id = json.pos_branch_id
             }
             return res;
         },
         export_as_JSON: function () {
             var json = _super_Orderline.export_as_JSON.apply(this, arguments);
-            if (this.user_id) {
-                json.user_id = this.user_id.id;
+            if (this.seller) {
+                json.user_id = this.seller.id;
             }
-            if (this.tags) {
-                var tag_ids = [];
-                for (var i = 0; i < this.tags.length; i++) {
-                    tag_ids.push(this.tags[i].id)
-                }
-                if (tag_ids.length) {
-                    json.tag_ids = [[6, false, tag_ids]]
-                }
+            if (this.tags && this.tags.length) {
+                json.tag_ids = [[6, false, _.map(this.tags, function (tag) {
+                    return tag.id;
+                })]];
             }
-            if (this.note) {
+            if (this.get_line_note()) {
                 json.note = this.get_line_note();
             }
             if (this.is_return) {
                 json.is_return = this.is_return;
             }
-            if (this.combo_items) {
-                json.combo_items = this.combo_items;
-            }
-            if (this.plus_point) {
-                json.plus_point = this.plus_point;
-            }
-            if (this.redeem_point) {
-                json.redeem_point = this.redeem_point;
+            if (this.combo_items && this.combo_items.length) {
+                json.combo_item_ids = [[6, false, _.map(this.combo_items, function (item) {
+                    return item.id;
+                })]];
             }
             if (this.uom_id) {
                 json.uom_id = this.uom_id
             }
-            if (this.variants) {
-                json.variants = this.variants;
-            }
-            if (this.prop_options) {
-                json.prop_options = this.prop_options;
-            }
-           
-            if (this.variant_products) {
-                json.variant_products = this.variant_products;
-            }
-            if (this.promotion) {
-                json.promotion = this.promotion;
-            }
-            if (this.promotion_reason) {
-                json.promotion_reason = this.promotion_reason;
-            }
-            if (this.promotion_discount_total_order) {
-                json.promotion_discount_total_order = this.promotion_discount_total_order;
-            }
-            if (this.promotion_discount_category) {
-                json.promotion_discount_category = this.promotion_discount_category;
-            }
-            if (this.promotion_discount_by_quantity) {
-                json.promotion_discount_by_quantity = this.promotion_discount_by_quantity;
-            }
-            if (this.promotion_discount) {
-                json.promotion_discount = this.promotion_discount;
-            }
-            if (this.promotion_gift) {
-                json.promotion_gift = this.promotion_gift;
-            }
-            if (this.promotion_price_by_quantity) {
-                json.promotion_price_by_quantity = this.promotion_price_by_quantity;
+            if (this.variants && this.variants.length) {
+                json.variant_ids = [[6, false, _.map(this.variants, function (variant) {
+                    return variant.id;
+                })]];
             }
             if (this.discount_reason) {
                 json.discount_reason = this.discount_reason
+            }
+            if (this.medical_insurance) {
+                json.medical_insurance = this.medical_insurance
+            }
+            if (this.frequent_buyer_id) {
+                json.frequent_buyer_id = this.frequent_buyer_id
+            }
+            if (this.packaging) {
+                json.packaging_id = this.packaging.id
+            }
+            if (this.lot_ids) {
+                var pack_lot_ids = json.pack_lot_ids;
+                for (var i = 0; i < this.lot_ids.length; i++) {
+                    var lot = this.lot_ids[i];
+                    pack_lot_ids.push([0, 0, {
+                        lot_name: lot['name'],
+                        quantity: lot['quantity'],
+                        lot_id: lot['id']
+                    }]);
+                }
+                json.pack_lot_ids = pack_lot_ids;
+            }
+            if (this.manager_user) {
+                json.manager_user_id = this.manager_user.id
+            }
+            if (this.pos.config.pos_branch_id) {
+                json.pos_branch_id = this.pos.config.pos_branch_id[0]
             }
             return json;
         },
         clone: function () {
             var orderline = _super_Orderline.clone.call(this);
             orderline.note = this.note;
-            orderline.variant_products = this.variant_products;
             return orderline;
+        },
+        set_combo_items: function (combo_item_ids) {
+            this.combo_items = [];
+            for (var index in combo_item_ids) {
+                var combo_item_id = combo_item_ids[index];
+                var combo_item = this.pos.combo_item_by_id[combo_item_id];
+                if (combo_item) {
+                    this.combo_items.push(combo_item)
+                }
+            }
+            this.trigger('change', this)
+        },
+        set_tags: function (tag_ids) {
+            this.tags = [];
+            for (var index in tag_ids) {
+                var tag_id = tag_ids[index];
+                var tag = this.pos.tag_by_id[tag_id];
+                if (tag) {
+                    this.tags.push(tag)
+                }
+            }
+            this.trigger('change', this)
+        },
+        set_discount_price: function (price_will_discount, tax) {
+            if (tax.include_base_amount) {
+                var line_subtotal = this.get_price_with_tax() / this.quantity;
+                var tax_before_discount = (line_subtotal - line_subtotal / (1 + tax.amount / line_subtotal));
+                var price_before_discount = line_subtotal - tax_before_discount; // b
+                var tax_discount = price_will_discount - price_will_discount / (1 + tax.amount / price_will_discount);
+                var price_discount = price_will_discount - tax_discount; // d
+                var price_exincluded_discount = price_before_discount - price_discount;
+                var new_tax_wihtin_discount = price_exincluded_discount - price_exincluded_discount / (1 + tax.amount / price_exincluded_discount);
+                var new_price_wihtin_discount = line_subtotal - price_will_discount;
+                var new_price_without_tax = new_price_wihtin_discount - new_tax_wihtin_discount;
+                var new_price_within_tax = new_price_without_tax + new_tax_wihtin_discount;
+                this.set_unit_price(new_price_within_tax);
+                this.trigger('change', this);
+            } else {
+                var tax_discount = tax.amount / 100 * price_will_discount;
+                var price_discount = price_will_discount - tax_discount;
+                var new_price_within_tax = this.price - price_discount - (0.91 * (parseInt(price_will_discount / 100)));
+                this.set_unit_price(new_price_within_tax);
+                this.trigger('change', this);
+            }
         },
         export_for_printing: function () {
             var receipt_line = _super_Orderline.export_for_printing.apply(this, arguments);
             receipt_line['combo_items'] = [];
             receipt_line['variants'] = [];
-            receipt_line['prop_options'] = [];
-            receipt_line['variant_products'] = [];
             receipt_line['tags'] = [];
             receipt_line['note'] = this.note || '';
-            receipt_line['promotion'] = null;
-            receipt_line['promotion_reason'] = null;
             if (this.combo_items) {
                 receipt_line['combo_items'] = this.combo_items;
             }
             if (this.variants) {
                 receipt_line['variants'] = this.variants;
-            }
-            if (this.prop_options) {
-                receipt_line['prop_options'] = this.prop_options;
-            }
-            if (this.variant_products) {
-                receipt_line['variant_products'] = this.variant_products;
-            }
-            if (this.promotion) {
-                receipt_line.promotion = this.promotion;
-                receipt_line.promotion_reason = this.promotion_reason;
             }
             if (this.tags) {
                 receipt_line['tags'] = this.tags;
@@ -1945,86 +1107,248 @@ odoo.define('pos_retail.order', function (require) {
                 receipt_line['discount_reason'] = this.discount_reason;
             }
             receipt_line['tax_amount'] = this.get_tax() || 0.00;
+            if (this.variants) {
+                receipt_line['variants'] = this.variants;
+            }
+            if (this.packaging) {
+                receipt_line['packaging'] = this.packaging;
+            }
             return receipt_line;
+        },
+        get_price_included_tax_by_price_of_item: function (price_unit, quantity) {
+            var taxtotal = 0;
+            var product = this.get_product();
+            var taxes_ids = product.taxes_id;
+            var taxes = this.pos.taxes;
+            var taxdetail = {};
+            var product_taxes = [];
+
+            _(taxes_ids).each(function (el) {
+                product_taxes.push(_.detect(taxes, function (t) {
+                    return t.id === el;
+                }));
+            });
+
+            var all_taxes = this.compute_all(product_taxes, price_unit, quantity, this.pos.currency.rounding);
+            _(all_taxes.taxes).each(function (tax) {
+                taxtotal += tax.amount;
+                taxdetail[tax.id] = tax.amount;
+            });
+
+            return {
+                "priceWithTax": all_taxes.total_included,
+                "priceWithoutTax": all_taxes.total_excluded,
+                "tax": taxtotal,
+                "taxDetails": taxdetail,
+            };
+        },
+        set_unit_price: function (price) {
+            var discount_product_id = null;
+            if (this.pos.config.discount_product_id) {
+                discount_product_id = this.pos.config.discount_product_id[0]
+            }
+            var self = this;
+            if (this.product && (parseFloat(price) < this.product.minimum_list_price) && !this.packaging && !this.promotion && this.product.id != discount_product_id) {
+                return this.pos.gui.show_popup('number', {
+                    'title': _t('Product have minimum price smaller list price, plese input price need to change'),
+                    'value': 0,
+                    'confirm': function (price) {
+                        return self.set_unit_price(price);
+                    }
+                })
+            } else {
+                _super_Orderline.set_unit_price.apply(this, arguments);
+            }
+        },
+        has_valid_product_lot: function () { //  TODO: is line multi lots or not
+            if (this.lot_ids && this.lot_ids.length) {
+                return true
+            } else {
+                return _super_Orderline.has_valid_product_lot.apply(this, arguments);
+            }
+        },
+        set_taxes: function (tax_ids) { // TODO: add taxes to order line
+            if (this.product) {
+                this.product.taxes_id = tax_ids;
+                this.trigger('change', this);
+            }
+        },
+        set_variants: function (variant_ids) { // TODO: add variants to order line
+            var self = this;
+            var sale_price;
+            if (this.pos.server_version == 10) {
+                sale_price = this.pos.get_price(this.product, this.pos.pricelist); // v10 only
+            } else {
+                sale_price = this.product.get_price(this.product, this.pos.default_pricelist, this.quantity);
+            }
+            this.variants = _.map(variant_ids, function (variant_id) {
+                var variant = self.pos.variant_by_id[variant_id];
+                if (variant) {
+                    return variant
+                }
+            });
+            this.price_manually_set = true;
+            if (this.variants.length == 0) {
+                this.set_unit_price(sale_price);
+            } else {
+                var price_extra_total = sale_price;
+                for (var i = 0; i < this.variants.length; i++) {
+                    price_extra_total += this.variants[i].price_extra;
+                }
+                this.set_unit_price(price_extra_total);
+            }
+        },
+        get_product_price_quantity_item: function () {
+            var product_tmpl_id = this.product.product_tmpl_id;
+            if (product_tmpl_id instanceof Array) {
+                product_tmpl_id = product_tmpl_id[0]
+            }
+            var product_price_quantities = this.pos.price_each_qty_by_product_tmpl_id[product_tmpl_id];
+            if (product_price_quantities) {
+                var product_price_quanty_temp = null;
+                for (var i = 0; i < product_price_quantities.length; i++) {
+                    var product_price_quantity = product_price_quantities[i];
+                    if (this.quantity >= product_price_quantity['quantity']) {
+                        if (!product_price_quanty_temp) {
+                            product_price_quanty_temp = product_price_quantity;
+                        } else {
+                            if (product_price_quanty_temp['quantity'] <= product_price_quantity['quantity']) {
+                                product_price_quanty_temp = product_price_quantity;
+                            }
+                        }
+                    }
+                }
+                return product_price_quanty_temp;
+            }
+            return null
+        },
+        has_variants: function () {
+            if (this.variants && this.variants.length && this.variants.length > 0) {
+                return true
+            } else {
+                return false
+            }
+        },
+        set_product_lot: function (product) {
+            if (product) { // first install may be have old orders, this is reason made bug
+                return _super_Orderline.set_product_lot.apply(this, arguments);
+            } else {
+                return null
+            }
+        },
+        // if config product tax id: have difference tax of other company
+        // but when load data account.tax, pos default only get data of current company
+        // and this function return some item undefined
+        get_taxes: function () {
+            var taxes = _super_Orderline.export_for_printing.apply(this, arguments);
+            var new_taxes = [];
+            var taxes_ids = this.get_product().taxes_id;
+            var taxes = [];
+            for (var i = 0; i < taxes_ids.length; i++) {
+                if (this.pos.taxes_by_id[taxes_ids[i]]) {
+                    new_taxes.push(this.pos.taxes_by_id[taxes_ids[i]]);
+                }
+            }
+            return new_taxes;
+        },
+        get_packaging: function () {
+            if (!this || !this.product || !this.pos.packaging_by_product_id) {
+                return false;
+            }
+            if (this.pos.packaging_by_product_id[this.product.id]) {
+                return true
+            } else {
+                return false
+            }
+        },
+        get_packaging_added: function () {
+            if (this.packaging) {
+                return this.packaging;
+            } else {
+                return false
+            }
         },
         set_global_discount: function (discount) {
             this.discount_reason = discount.reason;
             this.set_discount(discount.amount);
             this.trigger('change', this);
         },
+        set_unit: function (uom_id, price) {
+            this.uom_id = uom_id;
+            this.trigger('change', this);
+            this.trigger('trigger_update_line');
+            if (price) {
+                this.set_unit_price(price);
+            }
+            this.price_manually_set = true;
+            return true;
+        },
         change_unit: function () {
             var self = this;
             var product = this.product;
-            var uom_items = this.pos.uoms_prices_by_product_tmpl_id[product.product_tmpl_id]
+            var product_tmpl_id;
+            if (product.product_tmpl_id instanceof Array) {
+                product_tmpl_id = product.product_tmpl_id[0]
+            } else {
+                product_tmpl_id = product.product_tmpl_id;
+            }
+            var uom_items = this.pos.uoms_prices_by_product_tmpl_id[product_tmpl_id];
             if (!uom_items) {
-                this.pos.gui.show_popup('notify_popup', {
-                    title: 'ERROR',
-                    from: 'top',
-                    align: 'center',
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
                     body: product['display_name'] + ' have ' + product['uom_id'][1] + ' only.',
-                    color: 'danger',
-                    timer: 2000
                 });
-                return;
             }
             var list = [];
             for (var i = 0; i < uom_items.length; i++) {
                 var item = uom_items[i];
                 list.push({
-                    'label': item.uom_id[1],
+                    'label': item.uom_id[1] + ', at price ' + item['price'],
                     'item': item,
                 });
+            }
+            var base_uom_id = product['base_uom_id'];
+            if (base_uom_id) {
+                var base_uom = this.pos.uom_by_id[base_uom_id[0]];
+                base_uom['price'] = product.list_price;
+                base_uom['uom_id'] = base_uom['id'];
+                list.push({
+                    'label': base_uom['name'] + ', at price ' + base_uom['price'],
+                    'item': base_uom
+                })
             }
             if (list.length) {
                 this.pos.gui.show_popup('selection', {
                     title: _t('Select Unit need to change'),
                     list: list,
                     confirm: function (item) {
-                        self.set_unit_price(item['price'])
-                        self.uom_id = item['uom_id'][0];
-                        self.trigger('change', this);
-                        self.trigger('update:OrderLine');
+                        return self.set_unit(item.uom_id[0], item['price']);
                     }
                 });
             } else {
-                return this.pos.gui.show_popup('confirm', {
+                return this.pos.gui.show_popup('dialog', {
                     title: 'Warning',
                     body: product['display_name'] + ' only one ' + product['uom_id'][1],
                 });
             }
         },
         change_combo: function () {
-            
-            this.pos.gui.show_popup('popup_selection_combos', {
-                title: this.product.display_name,
-                combo_items: this.combo_items,
-                selected_orderline: this
+            var line = this;
+            var combo_items = _.filter(this.pos.combo_items, function (combo_item) {
+                return combo_item.product_combo_id[0] == line.product.product_tmpl_id || combo_item.product_combo_id[0] == line.product.product_tmpl_id[0]
             });
-                
-            /*
-            var combo_items = [];
-            for (var i = 0; i < this.pos.combo_items.length; i++) {
-                var combo_item = this.pos.combo_items[i];
-                if (combo_item.product_combo_id[0] == this.product.product_tmpl_id) {
-                    combo_items.push(combo_item);
-                }
-            }
-            if (combo_items.length) {                
+            if (combo_items.length) {
                 this.pos.gui.show_popup('popup_selection_combos', {
-                    title: this.product.display_name,
+                    title: 'Please choice items',
                     combo_items: combo_items,
                     selected_orderline: this
                 });
             } else {
-                return this.pos.gui.show_popup('confirm', {
+                this.pos.gui.show_popup('dialog', {
                     title: 'Warning',
-                    body: 'Product selected not set combo items',
-                    confirm: function () {
-                        return self.pos.gui.close_popup();
-                    }
+                    body: 'Product is combo but have not set combo items',
                 });
             }
-            */
         },
         change_cross_selling: function () {
             var self = this;
@@ -2036,14 +1360,39 @@ odoo.define('pos_retail.order', function (require) {
                     widget: this,
                     cross_items: cross_items
                 });
+            } else {
+                this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'You not active cross selling or product have not items cross selling'
+                });
             }
         },
         get_sale_person: function () {
-            return this.user_id || null
+            return this.seller || null
         },
-        set_sale_person: function (user) {
-            this.user_id = user;
-            this.trigger('change', this);
+        get_number_of_order: function () {
+            var uid = this.uid;
+            var order = this.order;
+            for (var i = 0; i < order.orderlines.models.length; i++) {
+                var line = order.orderlines.models[i];
+                if (line.uid == uid) {
+                    return i + 1
+                }
+            }
+        },
+        set_sale_person: function (seller) {
+            if (this.pos.config.force_seller) {
+                var order = this.order;
+                _.each(order.orderlines.models, function (line) {
+                    line.seller = seller;
+                    line.trigger('change', line);
+                });
+                order.seller = seller;
+            } else {
+                this.seller = seller;
+                this.trigger('change', this);
+            }
+            this.order.trigger('change', this.order);
         },
         get_price_without_quantity: function () {
             if (this.quantity != 0) {
@@ -2052,65 +1401,22 @@ odoo.define('pos_retail.order', function (require) {
                 return 0
             }
         },
-        get_line_image: function () { // show image on receipt and orderlines            
-            if(this.variant_products.length > 0){                
-                return window.location.origin + '/web/image?model=product.product&field=image_medium&id=' + this.variant_products[0].id;
-            } else {
-                return window.location.origin + '/web/image?model=product.product&field=image_medium&id=' + this.product.id;
-            }
+        get_line_image: function () { // show image on receipt and orderlines
+            return window.location.origin + '/web/image?model=product.product&field=image_medium&id=' + this.product.id;
         },
         // ------------- **** --------------------------------------
         // when cashiers select line, auto pop-up cross sell items
         // or if product have suggestion items, render element show all suggestion items
         // ------------- **** --------------------------------------
-        set_selected: function (selected) {
-            _super_Orderline.set_selected.apply(this, arguments);
-            var self = this;
-            var contents = $('.product-list-re-comment');
-            if (this.product && this.selected && (this.product['cross_selling'] || this.product['suggestion_sale'])) {
-                var product_tmpl_id = this.product['product_tmpl_id'];
-                if (product_tmpl_id && product_tmpl_id.length == undefined) {
-                    var suggestion_items = _.filter(this.pos.suggestion_items, function (suggestion_item) {
-                        return suggestion_item['product_tmpl_id'][0] == product_tmpl_id;
-                    });
-                    if (suggestion_items.length && contents) {
-                        contents.empty();
-                        contents.css({'display': 'inherit'})
-                        for (var i = 0; i < suggestion_items.length; i++) {
-                            var suggestion_product = this.pos.db.get_product_by_id(suggestion_items[i]['product_id'][0])
-                            if (suggestion_product) {
-                                var image_url = this.order.get_product_image_url(suggestion_product);
-                                var product_html = qweb.render('product_suggestion', {
-                                    widget: this.pos.chrome,
-                                    suggestion: suggestion_items[i],
-                                    pricelist: this.pricelist || this.pos.default_pricelist,
-                                    image_url: image_url
-                                });
-                                contents.append(product_html);
-                            }
-                        }
-                        $('.product-list-re-comment .product').click(function () {
-                            var suggestion_id = parseInt($(this).data()['suggestionId']);
-                            if (suggestion_id) {
-                                var suggestion = self.pos.suggestion_by_id[suggestion_id];
-                                var product_id = suggestion['product_id'][0];
-                                var product = self.pos.db.get_product_by_id(product_id);
-                                if (product) {
-                                    self.pos.get_order().add_product(product);
-                                    var selected_orderline = self.pos.get_order().selected_orderline;
-                                    selected_orderline.set_unit_price(suggestion['list_price']);
-                                    selected_orderline.set_quantity(suggestion['quantity'], 'keep price when add suggestion item');
-                                }
-                            }
-                        })
-                    }
-                    else if (!suggestion_items && contents) {
-                        contents.css({'display': 'none'});
-                    }
-                }
-            }
-            if (this.selected == false) {
-                contents.css({'display': 'none'})
+        show_cross_sale: function () {
+            var cross_items = _.filter(this.pos.cross_items, function (cross_item) {
+                return cross_item['product_tmpl_id'][0] == product_tmpl_id;
+            });
+            if (cross_items.length) {
+                this.pos.gui.show_popup('popup_cross_selling', {
+                    widget: this,
+                    cross_items: cross_items
+                });
             }
         },
         is_has_tags: function () {
@@ -2123,7 +1429,7 @@ odoo.define('pos_retail.order', function (require) {
         is_multi_variant: function () {
             var variants = this.pos.variant_by_product_tmpl_id[this.product.product_tmpl_id];
             if (!variants) {
-                return
+                return false
             }
             if (variants.length > 0) {
                 return true;
@@ -2131,24 +1437,19 @@ odoo.define('pos_retail.order', function (require) {
                 return false;
             }
         },
-        get_item_discout: function(){
-        	var discount = this.get_unit_price() * (this.get_discount() / 100.0);
-        	return discount;        	
-        },
         get_price_discount: function () { // method return discount amount of pos order lines gui
-            var price_unit = this.get_unit_price();
-            var prices = this.get_all_prices();
-            var priceWithTax = prices['priceWithTax'];
-            var tax = prices['tax'];
-            var discount = priceWithTax - tax - price_unit;
-            return discount
+            var price = this.get_unit_price() * (1.0 - (this.get_discount() / 100.0));
+            var base_price = this.get_unit_price();
+            return (base_price - price) * this.quantity
         },
         get_unit: function () {
             if (!this.uom_id) {
-                return _super_Orderline.get_unit.apply(this, arguments);
+                var unit = _super_Orderline.get_unit.apply(this, arguments);
+                return unit;
             } else {
-                var unit_id = this.uom_id
-                return this.pos.units_by_id[unit_id];
+                var unit_id = this.uom_id;
+                var unit = this.pos.units_by_id[unit_id];
+                return unit;
             }
         },
         is_multi_unit_of_measure: function () {
@@ -2187,8 +1488,8 @@ odoo.define('pos_retail.order', function (require) {
             return tracking;
         },
         set_quantity: function (quantity, keep_price) {
-            if (this.uom_id) {
-                keep_price = 'keep price because changed uom id'
+            if (this.uom_id || this.redeem_point) {
+                keep_price = 'keep price because changed uom id or have redeem point'
             }
             if (this.pos.the_first_load == false && quantity != 'remove' && this.pos.config['allow_order_out_of_stock'] == false && quantity && quantity != 'remove' && this.order.syncing != true && this.product['type'] != 'service') {
                 var current_qty = 0
@@ -2201,16 +1502,22 @@ odoo.define('pos_retail.order', function (require) {
                 current_qty += parseFloat(quantity);
                 if (current_qty > this.product['qty_available'] && this.product['type'] == 'product') {
                     var product = this.pos.db.get_product_by_id(this.product.id);
-                    return this.pos.gui.show_popup('confirm', {
+                    this.pos.gui.show_popup('confirm', {
                         title: 'Warning',
-                        body: 'You can not set quantity bigger than ' + product.qty_available + ' unit',
+                        body: product['name'] + ' quantity on hand is 0, blocked sale it.',
                     });
                 }
             }
             var res = _super_Orderline.set_quantity.call(this, quantity, keep_price); // call style change parent parameter : keep_price
+            if (this.combo_items && this.pos.config.screen_type != 'kitchen') { // if kitchen screen, no need reset combo items
+                this.trigger('change', this);
+            }
+            var get_product_price_quantity = this.get_product_price_quantity_item(); // product price filter by quantity of cart line. Example: buy 1 unit price 1, buy 10 price is 0.5
+            if (get_product_price_quantity) {
+                this.set_unit_price(get_product_price_quantity['price_unit']);
+            }
             var order = this.order;
             var orderlines = order.orderlines.models;
-            debugger;
             if (!order.fiscal_position || orderlines.length != 0) {
                 for (var i = 0; i < orderlines.length; i++) { // reset taxes_id of line
                     orderlines[i]['taxes_id'] = [];
@@ -2249,90 +1556,32 @@ odoo.define('pos_retail.order', function (require) {
             }
             return res;
         },
-        set_unit_price: function (price) {
-            if (price > 0) {
-                if (this.plus_point && this.plus_point > 0) {
-                    var curr_plus_point = this.plus_point;
-                    var new_plus = price / this.price * curr_plus_point;
-                    this.plus_point = new_plus;
-                }
-                else if (this.redeem_point && this.redeem_point > 0 && this.price > 0) {
-                    var curr_redeem_point = this.redeem_point;
-                    var new_redeem_point = price / this.price * curr_redeem_point;
-                    this.redeem_point = new_redeem_point;
-                }
-            } else if (price <= 0) {
-                if (this.plus_point && this.plus_point > 0) {
-                    this.plus_point = 0;
-                }
-                else if (this.redeem_point && this.redeem_point > 0) {
-                    this.redeem_point = 0;
-                }
-            }
-            return _super_Orderline.set_unit_price.apply(this, arguments);
-        },
-        set_line_note: function (note) {
-            this.note = note;
-            
-            if (this.syncing == false || !this.syncing) {
-                if (this.pos.pos_bus) {
-                    var order = this.order.export_as_JSON();
-                    this.pos.pos_bus.push_message_to_other_sessions({
-                        action: 'set_line_note',
-                        data: {
-                            uid: this.uid,
-                            note: note,
-                        },
-                        bus_id: this.pos.config.bus_id[0],
-                        order_uid: order.uid,
-                    });
-                }
-            }
-         
-            this.trigger('change', this);
-        },
-        get_line_note: function () {
-            //alert("Note");
-            //alert(this.note);
+        get_line_note: function (note) {
             return this.note;
-        },
-        get_variant_product: function () {               
-            //alert("Variant");
-            //alert(this.variant_products);
-           
-            return this.variant_products;
-        },
-        set_variant_product: function (variant_product) {                        
-            this.variant_products = variant_product;           
-            this.trigger('change', this);
         },
         can_be_merged_with: function (orderline) {
             var merge = _super_Orderline.can_be_merged_with.apply(this, arguments);
             var current_price = this.price;
             var line_add_price;
             if (this.pos.server_version == 10) {
-                var line_add_price = this.price;
+                line_add_price = this.price;
             }
-            if (this.pos.server_version == 11) {
-                var line_add_price = orderline.get_product().get_price(orderline.order.pricelist, this.get_quantity());
+            if ([11, 12].indexOf(this.pos.server_version) != -1) {
+                line_add_price = orderline.get_product().get_price(orderline.order.pricelist, this.get_quantity());
             }
             var current_price_round = round_pr(Math.max(0, current_price), this.pos.currency.rounding);
             var line_add_price_round = round_pr(Math.max(0, line_add_price), this.pos.currency.rounding);
-            if (orderline.get_line_note() !== this.get_line_note() || this.promotion) {
-                return false;
-            }
-            debugger;
-            if (this.get_product().is_prop == true ) {
+            if (orderline.get_line_note() !== this.get_line_note()) {
                 return false;
             }
             if (current_price != line_add_price && current_price_round == line_add_price_round) {
-                
                 if (this.get_product().id !== orderline.get_product().id) {
-                    return false;                
+                    return false;
                 } else if (!this.get_unit() || !this.get_unit().is_pos_groupable) {
                     return false;
                 } else if (this.get_product_type() !== orderline.get_product_type()) {
                     return false;
+                } else if (this.get_discount() > 0) {
                     return false;
                 } else if (this.product.tracking == 'lot') {
                     return false;
@@ -2340,72 +1589,10 @@ odoo.define('pos_retail.order', function (require) {
                     return true;
                 }
             }
-            return merge
-        },
-        compute_all: function (taxes, price_unit, quantity, currency_rounding, no_map_tax) {
-            var all_taxes = _super_Orderline.compute_all.apply(this, arguments);
-            if (!this.taxes_id || this.taxes_id == [] || this.taxes_id.length == 0) {
-                return all_taxes;
-            } else {
-                var taxes = [];
-                for (var number in this.taxes_id) {
-                    taxes.push(this.pos.taxes_by_id[this.taxes_id[number]])
-                }
-                var self = this;
-                var list_taxes = [];
-                var currency_rounding_bak = currency_rounding;
-                if (this.pos.company.tax_calculation_rounding_method == "round_globally") {
-                    currency_rounding = currency_rounding * 0.00001;
-                }
-                var total_excluded = round_pr(price_unit * quantity, currency_rounding);
-                var total_included = total_excluded;
-                var base = total_excluded;
-                _(taxes).each(function (tax) {
-                    if (!no_map_tax) {
-                        tax = self._map_tax_fiscal_position(tax);
-                    }
-                    if (!tax) {
-                        return;
-                    }
-                    if (tax.amount_type === 'group') {
-                        var ret = self.compute_all(tax.children_tax_ids, price_unit, quantity, currency_rounding);
-                        total_excluded = ret.total_excluded;
-                        base = ret.total_excluded;
-                        total_included = ret.total_included;
-                        list_taxes = list_taxes.concat(ret.taxes);
-                    }
-                    else {
-                        var tax_amount = self._compute_all(tax, base, quantity);
-                        tax_amount = round_pr(tax_amount, currency_rounding);
-
-                        if (tax_amount) {
-                            if (tax.price_include) {
-                                total_excluded -= tax_amount;
-                                base -= tax_amount;
-                            }
-                            else {
-                                total_included += tax_amount;
-                            }
-                            if (tax.include_base_amount) {
-                                base += tax_amount;
-                            }
-                            var data = {
-                                id: tax.id,
-                                amount: tax_amount,
-                                name: tax.name,
-                            };
-                            list_taxes.push(data);
-                        }
-                    }
-                });
-                var tax_values = {
-                    taxes: list_taxes,
-                    total_excluded: round_pr(total_excluded, currency_rounding_bak),
-                    total_included: round_pr(total_included, currency_rounding_bak)
-                }
-                return tax_values;
+            if (orderline['combo_items'] || orderline.product.is_combo || orderline.is_return) {
+                return false;
             }
-
+            return merge
         },
     });
 });

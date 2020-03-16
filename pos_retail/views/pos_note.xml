@@ -45,8 +45,8 @@
 
         <menuitem id="menu_action_pos_note"
                   action="action_pos_note"
-                  parent="menu_retail"
-                  sequence="110"
+                  parent="menu_master_data"
+                  sequence="11"
         />
 
     </data>

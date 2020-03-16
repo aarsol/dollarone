@@ -70,6 +70,8 @@
                 <form string="Loyalties">
                     <header>
                         <field name="state" widget="statusbar" clickable="true"/>
+                        <button name="active_all_pos" string="Active all pos" type="object"
+                                groups="point_of_sale.group_pos_manager" class="btn-primary"/>
                     </header>
                     <sheet>
                         <h1>
@@ -78,21 +80,16 @@
                             </a>
                         </h1>
                         <group>
-                            <group>
-                                <field name="start_date"/>
-                                <field name="end_date"/>
-                                <field name="product_loyalty_id"/>
-                            </group>
-                            <group>
-                                <field name="active"/>
-                            </group>
+                            <field name="product_loyalty_id"/>
+                            <field name="period_expired"/>
+                            <field name="rounding_down"/>
+                            <field name="rounding" attrs="{'invisible': [('rounding_down', '=', True)]}"/>
                         </group>
                         <group string="Rules">
                             <field name="rule_ids" nolabel="1">
                                 <tree string="Rule">
                                     <field name="name"/>
                                     <field name="type"/>
-                                    <field name="rounding"/>
                                     <field name="coefficient"/>
                                     <field name="min_amount"/>
                                 </tree>
@@ -109,11 +106,9 @@
                                                 <field name="type"/>
                                             </group>
                                             <group>
-                                                <field name="coefficient"
-                                                       attrs="{'invisible': [('type', '=', 'order_amount')]}"/>
-                                                <field name="rounding"/>
-                                                <field name="min_amount"
-                                                       attrs="{'invisible': [('type', '=', 'order_amount')]}"/>
+                                                <field name="coefficient"/>
+                                                <field name="min_amount"/>
+                                                <field name="coefficient_note" nolabel="1"/>
                                             </group>
                                         </group>
                                         <group>
@@ -121,15 +116,6 @@
                                                    attrs="{'required': [('type', '=', 'products')], 'invisible': [('type', '!=', 'products')]}"/>
                                             <field name="category_ids" colspan="4"
                                                    attrs="{'required': [('type', '=', 'categories')], 'invisible': [('type', '!=', 'categories')]}"/>
-                                            <field name="rule_order_amount_ids" colspan="4"
-                                                   attrs="{'required': [('type', '=', 'order_amount')], 'invisible': [('type', '!=', 'order_amount')]}"
-                                                   nolabel="1">
-                                                <tree string="Rule by amount order" editable="1">
-                                                    <field name="amount_from"/>
-                                                    <field name="amount_to"/>
-                                                    <field name="point"/>
-                                                </tree>
-                                            </field>
                                         </group>
                                     </sheet>
                                 </form>
@@ -157,7 +143,7 @@
                                             </group>
                                             <group>
                                                 <field name="min_amount"/>
-                                                <field name="rounding"/>
+                                                <field name="coefficient_note" nolabel="1"/>
                                             </group>
                                         </group>
                                         <group>
@@ -180,6 +166,9 @@
                                 </form>
                             </field>
                         </group>
+                        <group string="POS applied">
+                            <field name="config_ids" nolabel="1" readonly="1"/>
+                        </group>
                     </sheet>
                 </form>
             </field>
@@ -191,8 +180,6 @@
             <field name="arch" type="xml">
                 <tree string="Loyalties">
                     <field name="name"/>
-                    <field name="start_date"/>
-                    <field name="end_date"/>
                 </tree>
             </field>
         </record>
@@ -203,8 +190,6 @@
             <field name="arch" type="xml">
                 <search string="Loyalties">
                     <field name="name"/>
-                    <field name="start_date"/>
-                    <field name="end_date"/>
                 </search>
             </field>
         </record>
@@ -234,6 +219,7 @@
                     <field name="type"/>
                     <field name="coefficient"/>
                     <field name="min_amount"/>
+                    <field name="state"/>
                 </tree>
             </field>
         </record>
@@ -243,6 +229,9 @@
             <field name="model">pos.loyalty.rule</field>
             <field name="arch" type="xml">
                 <form string="Loyalty Rules">
+                    <header>
+                        <field name="state" widget="statusbar" clickable="true"/>
+                    </header>
                     <sheet>
                         <div class="oe_title">
                             <label for="name" class="oe_edit_only"/>
@@ -256,12 +245,10 @@
                                 <field name="type"/>
                             </group>
                             <group>
-                                <field name="coefficient"
-                                       attrs="{'invisible': [('type', '=', 'order_amount')]}"/>
-                                <field name="rounding"/>
-                                <field name="min_amount"
-                                       attrs="{'invisible': [('type', '=', 'order_amount')]}"/>
+                                <field name="coefficient"/>
+                                <field name="min_amount"/>
                                 <field name="active"/>
+                                <field name="coefficient_note" nolabel="1"/>
                             </group>
                         </group>
                         <group>
@@ -269,15 +256,6 @@
                                    attrs="{'required': [('type', '=', 'products')], 'invisible': [('type', '!=', 'products')]}"/>
                             <field name="category_ids" colspan="4"
                                    attrs="{'required': [('type', '=', 'categories')], 'invisible': [('type', '!=', 'categories')]}"/>
-                            <field name="rule_order_amount_ids" colspan="4"
-                                   attrs="{'required': [('type', '=', 'order_amount')], 'invisible': [('type', '!=', 'order_amount')]}"
-                                   nolabel="1">
-                                <tree string="Rule by amount order" editable="1">
-                                    <field name="amount_from"/>
-                                    <field name="amount_to"/>
-                                    <field name="point"/>
-                                </tree>
-                            </field>
                         </group>
                     </sheet>
                 </form>
@@ -290,8 +268,8 @@
             <field name="arch" type="xml">
                 <search string="Rules">
                     <field name="name"/>
-                    <field name="product_ids"/>
-                    <field name="category_ids"/>
+                    <field name="type"/>
+                    <field name="state"/>
                 </search>
             </field>
         </record>
@@ -319,6 +297,7 @@
                     <field name="name"/>
                     <field name="type"/>
                     <field name="min_amount"/>
+                    <field name="state"/>
                 </tree>
             </field>
         </record>
@@ -329,6 +308,9 @@
             <field name="priority">1</field>
             <field name="arch" type="xml">
                 <form string="Reward">
+                    <header>
+                        <field name="state" widget="statusbar" clickable="true"/>
+                    </header>
                     <sheet>
                         <div class="oe_title">
                             <label for="name" class="oe_edit_only" string="Name of reward"/>
@@ -343,17 +325,14 @@
                             </group>
                             <group>
                                 <field name="min_amount"/>
-                                <field name="rounding"/>
                                 <field name="active"/>
                             </group>
                         </group>
                         <group>
-                            <field name="coefficient"
-                                   attrs="{'invisible': [('type', 'not in', ['discount_products', 'discount_categories', 'use_point_payment', 'gift'])], 'required': [('type', 'in', ['discount_products', 'discount_categories', 'use_point_payment', 'gift'])]}"/>
+                            <field name="coefficient"/>
+                            <field name="coefficient_note" nolabel="1"/>
                             <field name="discount"
                                    attrs="{'invisible': [('type', 'not in', ['discount_products', 'discount_categories'])], 'required': [('type', 'in', ['discount_products', 'discount_categories'])]}"/>
-                            <field name="price_resale"
-                                   attrs="{'invisible': [('type', '!=', 'resale')], 'required': [('type', '=', 'resale')]}"/>
                             <field name="price_resale"
                                    attrs="{'invisible': [('type', '!=', 'resale')], 'required': [('type', '=', 'resale')]}"/>
                             <field name="gift_product_ids"
@@ -412,6 +391,89 @@
                 </xpath>
             </field>
         </record>
+
+        <record id="pos_loyalty_point_tree" model="ir.ui.view">
+            <field name="name">pos.loyalty.point.tree</field>
+            <field name="model">pos.loyalty.point</field>
+            <field name="priority">20</field>
+            <field name="arch" type="xml">
+                <tree string="Loyalty Points">
+                    <field name="loyalty_id"/>
+                    <field name="order_id"/>
+                    <field name="type"/>
+                    <field name="partner_id"/>
+                    <field name="end_date"/>
+                    <field name="point"/>
+                    <field name="state"/>
+                </tree>
+            </field>
+        </record>
+
+        <record id="pos_loyalty_point_form" model="ir.ui.view">
+            <field name="name">pos.loyalty.point.form</field>
+            <field name="model">pos.loyalty.point</field>
+            <field name="arch" type="xml">
+                <form string="Loyalty Point">
+                    <header>
+                        <field name="state" widget="statusbar" clickable="true"/>
+                    </header>
+                    <sheet>
+                        <div class="oe_title">
+                            <label for="loyalty_id" class="oe_edit_only"/>
+                            <h1>
+                                <field name="loyalty_id" class="oe_inline"/>
+                            </h1>
+                        </div>
+                        <group>
+                            <group>
+                                <field name="partner_id"/>
+                                <field name="order_id"/>
+                                <field name="type"/>
+                            </group>
+                            <group>
+                                <field name="end_date"/>
+                                <field name="point"/>
+                            </group>
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <record id="pos_loyalty_point_search" model="ir.ui.view">
+            <field name="name">pos.loyalty.point.filter</field>
+            <field name="model">pos.loyalty.point</field>
+            <field name="arch" type="xml">
+                <search string="Loyalty Points Filter">
+                    <field name="loyalty_id"/>
+                    <field name="order_id"/>
+                    <field name="type"/>
+                    <field name="partner_id"/>
+                    <field name="end_date"/>
+                    <field name="point"/>
+                    <field name="state"/>
+                    <group expand="0" string="Group By">
+                        <filter string="Customer" name="groupby_partner" domain="[]" context="{'group_by': 'partner_id'}"/>
+                        <filter string="Type" name="groupby_type" domain="[]" context="{'group_by': 'type'}"/>
+                        <filter string="State" name="groupby_state" domain="[]" context="{'group_by': 'state'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <record model="ir.actions.act_window" id="action_pos_loyalty_point">
+            <field name="name">Loyalty Points</field>
+            <field name="res_model">pos.loyalty.point</field>
+            <field name="view_type">form</field>
+            <field name="view_mode">tree,form</field>
+        </record>
+
+        <menuitem id="menu_action_pos_loyalty_point"
+                  action="action_pos_loyalty_point"
+                  parent="menu_loyalty"
+                  sequence="6"
+                  groups="point_of_sale.group_pos_manager"
+        />
 
     </data>
 </odoo>

@@ -1,105 +1,227 @@
 odoo.define('pos_retail.buttons', function (require) {
-
     var screens = require('point_of_sale.screens');
     var core = require('web.core');
-    var utils = require('web.utils');
-    var round_pr = utils.round_precision;
     var _t = core._t;
-    var rpc = require('pos.rpc');
     var qweb = core.qweb;
     var WebClient = require('web.AbstractWebClient');
-    var models = require('point_of_sale.models');
-   
-    var button_print_voucher = screens.ActionButtonWidget.extend({
-        template: 'button_print_voucher',
+    var rpc = require('pos.rpc');
+
+    var button_purchased_lines_histories = screens.ActionButtonWidget.extend({ // combo button
+        template: 'button_purchased_lines_histories',
         button_click: function () {
-            this.gui.show_popup('popup_print_vouchers', {
-                confirm: function () {
-                    var self = this;
-                    var period_days = parseFloat(this.$('.period_days').val());
-                    var apply_type = this.$('.apply_type').val();
-                    var voucher_amount = parseFloat(this.$('.voucher_amount').val());
-                    var quantity_create = parseInt(this.$('.quantity_create').val());
-                    var method = this.$('.method').val();
-                    var customer = this.pos.get_order().get_client();
-                    if (method == "special_customer" && !customer) {
-                        this.pos.gui.show_popup('confirm', {
-                            title: 'Warning',
-                            body: 'Because apply to Special customer, required select customer the first',
+            var self = this;
+            var order = this.pos.get_order();
+            var client = order.get_client();
+            if (!client) {
+                this.pos.gui.show_screen('clientlist');
+                this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'Could not show Purchased Histories Products, required choice Client the first'
+                })
+            } else {
+                var orders = _.filter(this.pos.db.get_pos_orders(), function (order) {
+                    return (order.partner_id && order.partner_id[0] == client.id)
+                });
+                if (!orders) {
+                    this.pos.gui.show_popup('dialog', {
+                        title: 'Warning',
+                        body: 'Client never Purchase from your Shop'
+                    })
+                } else {
+                    return rpc.query({
+                        model: 'pos.order.line',
+                        method: 'get_purchased_lines_histories_by_partner_id',
+                        args:
+                            [[], client.id],
+                        context: {
+                            pos: true
+                        }
+                    }, {shadow: true}).then(function (purchased_lines) {
+                        return self.pos.gui.show_popup('popup_selection_extend', {
+                            title: 'Purchased Lines Histories of Client selected',
+                            fields: ['create_date', 'order_id', 'product_id', 'create_uid'],
+                            multi_choice: true,
+                            sub_datas: purchased_lines,
+                            sub_template: 'purchased_lines',
+                            body: 'Please select one sale person',
+                            sub_button: '<div class="btn btn-success pull-right confirm">Add Products Selected</div>',
+                            confirm: function (product_ids) {
+                                if (product_ids && product_ids.length) {
+                                    for (var index in product_ids) {
+                                        var product_id = product_ids[index]
+                                        var product = self.pos.db.product_by_id[product_id];
+                                        self.pos.get_order().add_product(product);
+                                    }
+                                }
+                            }
                         })
-                        return self.pos.gui.show_screen('clientlist')
-                    }
-                    if (typeof period_days != 'number' || isNaN(period_days)) {
-                        return this.pos.gui.show_popup('confirm', {
-                            title: 'Warning',
-                            body: 'Wrong format, Period days is required and format is Float',
-                        })
-                    }
-                    if (typeof voucher_amount != 'number' || isNaN(voucher_amount)) {
-                        return this.pos.gui.show_popup('confirm', {
-                            title: 'Warning',
-                            body: 'Amount is required and format is Float',
-                        })
-                    }
-                    if (typeof quantity_create != 'number' || isNaN(quantity_create)) {
-                        return this.pos.gui.show_popup('confirm', {
-                            title: 'Warning',
-                            body: 'Quantity voucher will create is required and format is Number or float',
-                        })
-                    }
-                    var voucher_data = {
-                        apply_type: apply_type,
-                        value: voucher_amount,
-                        method: method,
-                        period_days: period_days,
-                        total_available: quantity_create
-                    };
-                    if (customer) {
-                        voucher_data['customer_id'] = customer['id'];
-                    }
-                    rpc.query({
-                        model: 'pos.voucher',
-                        method: 'create_voucher',
-                        args: [voucher_data]
-                    }).then(function (vouchers) {
-                        self.pos.vouchers = vouchers;
-                        self.pos.gui.show_screen('vouchers_screen');
-                    }).fail(function (type, error) {
-                        return self.pos.query_backend_fail(type, error);
+                    }).fail(function (err) {
+                        self.pos.query_backend_fail(err)
                     });
-                    return this.gui.close_popup();
-                },
-                cancel: function () {
-                    return this.gui.close_popup();
                 }
-            });
+            }
+        }
+    });
+
+    screens.define_action_button({
+        'name': 'button_purchased_lines_histories',
+        'widget': button_purchased_lines_histories,
+        'condition': function () {
+            return true;
+        }
+    });
+
+    var button_discount_sale_price = screens.ActionButtonWidget.extend({
+        template: 'button_discount_sale_price',
+        button_click: function () {
+            var self = this;
+            var order = this.pos.get_order();
+            if (!order) {
+                return
+            }
+            var selected_line = order.get_selected_orderline();
+            if (!selected_line) {
+                return
+            }
+            var amount_with_tax = selected_line.get_price_with_tax();
+            this.gui.show_popup('number', {
+                'title': _t('Which value of discount would you apply ?'),
+                'value': self.pos.config.discount_sale_price_limit,
+                'confirm': function (discount_value) {
+                    discount_value = parseFloat(discount_value);
+                    if (amount_with_tax < discount_value) {
+                        return self.pos.gui.show_popup('dialog', {
+                            title: 'Warning',
+                            body: 'We could not set amount bigger than amount of line'
+                        })
+                    } else {
+                        if (discount_value > self.pos.config.discount_sale_price_limit) {
+                            if (self.pos.config.discount_unlock_by_manager) {
+                                var manager_validate = [];
+                                _.each(self.pos.config.manager_ids, function (user_id) {
+                                    var user = self.pos.user_by_id[user_id];
+                                    if (user) {
+                                        manager_validate.push({
+                                            label: user.name,
+                                            item: user
+                                        })
+                                    }
+                                });
+                                if (manager_validate.length == 0) {
+                                    return self.pos.gui.show_popup('confirm', {
+                                        title: 'Warning',
+                                        body: 'Could not set discount bigger than: ' + self.pos.gui.chrome.format_currency(discount_value) + ' . If is required, need manager approve but your pos not set manager users approve on Security Tab',
+                                    })
+                                }
+                                return self.pos.gui.show_popup('selection', {
+                                    title: 'Choice Manager Validate',
+                                    body: 'Only Manager can approve this Discount, please ask him',
+                                    list: manager_validate,
+                                    confirm: function (manager_user) {
+                                        if (!manager_user.pos_security_pin) {
+                                            return self.pos.gui.show_popup('confirm', {
+                                                title: 'Warning',
+                                                body: user.name + ' have not set pos security pin before. Please set pos security pin first'
+                                            })
+                                        } else {
+                                            return self.pos.gui.show_popup('ask_password', {
+                                                title: 'Pos Security Pin of Manager',
+                                                body: _t('Your staff need approve discount value is ' + self.pos.gui.chrome.format_currency(discount_value) + ', please approve'),
+                                                confirm: function (password) {
+                                                    if (manager_user['pos_security_pin'] != password) {
+                                                        self.pos.gui.show_popup('dialog', {
+                                                            title: 'Error',
+                                                            body: 'POS Security pin of ' + manager_user.name + ' not correct !'
+                                                        });
+                                                    } else {
+                                                        var taxes_ids = selected_line.product.taxes_id;
+                                                        var taxes = self.pos.taxes;
+                                                        _(taxes_ids).each(function (id) {
+                                                            var tax = _.detect(taxes, function (t) {
+                                                                return t.id === id;
+                                                            });
+                                                            if (tax) {
+                                                                selected_line.set_discount_price(discount_value, tax)
+                                                            }
+
+                                                        });
+                                                        if (taxes_ids.length == 0) {
+                                                            selected_line.set_unit_price(selected_line.price - discount_value);
+                                                            selected_line.trigger('change', selected_line);
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                })
+                            } else {
+                                return self.gui.show_popup('dialog', {
+                                    title: _t('Warning'),
+                                    body: 'You can not set discount bigger than ' + self.pos.config.discount_limit_amount + '. Please contact your pos manager and set bigger than',
+                                })
+                            }
+                        } else {
+                            var taxes_ids = selected_line.product.taxes_id;
+                            var taxes = self.pos.taxes;
+                            _(taxes_ids).each(function (id) {
+                                var tax = _.detect(taxes, function (t) {
+                                    return t.id === id;
+                                });
+                                if (tax)
+                                    selected_line.set_discount_price(discount_value, tax)
+                            });
+                            if (taxes_ids.length == 0) {
+                                selected_line.set_unit_price(selected_line.price - discount_value);
+                                selected_line.trigger('change', selected_line);
+                            }
+                        }
+                    }
+                }
+            })
+
 
         }
     });
-    
 
-    var button_promotion = screens.ActionButtonWidget.extend({// promotion button
-        template: 'button_promotion',
-        button_click: function () {
-            var order = this.pos.get('selectedOrder');
-            if (order) {
-                order.compute_promotion()
-            }
+    screens.define_action_button({
+        'name': 'button_discount_sale_price',
+        'widget': button_discount_sale_price,
+        'condition': function () {
+            return this.pos.config.discount_sale_price && this.pos.config.discount_sale_price_limit > 0;
         }
-    });    
+    });
 
-    var button_combo = screens.ActionButtonWidget.extend({ // combo button
-        template: 'button_combo',
+    var button_set_seller = screens.ActionButtonWidget.extend({ // combo button
+        template: 'button_set_seller',
         button_click: function () {
-            var selected_orderline = this.pos.get_order().selected_orderline;
-            if (!selected_orderline) {
-                return;
-            } else {
-                selected_orderline.change_combo()
-            }
-
+            var self = this;
+            var sellers = this.pos.sellers;
+            return this.pos.gui.show_popup('popup_selection_extend', {
+                title: 'Select Sale Person',
+                fields: ['name', 'email', 'id'],
+                sub_datas: sellers,
+                sub_template: 'sale_persons',
+                body: 'Please select one sale person',
+                confirm: function (user_id) {
+                    var seller = self.pos.user_by_id[user_id];
+                    var order = self.pos.get_order();
+                    if (order) {
+                        var selected_line = order.get_selected_orderline();
+                        selected_line.set_sale_person(seller);
+                    }
+                }
+            })
         }
-    });    
+    });
+
+    screens.define_action_button({
+        'name': 'button_set_seller',
+        'widget': button_set_seller,
+        'condition': function () {
+            return this.pos.config.add_sale_person && this.pos.sellers && this.pos.sellers.length >= 1;
+        }
+    });
 
     var button_combo_item_add_lot = screens.ActionButtonWidget.extend({ // add lot to combo items
         template: 'button_combo_item_add_lot',
@@ -107,7 +229,7 @@ odoo.define('pos_retail.buttons', function (require) {
         button_click: function () {
             var selected_orderline = this.pos.get_order().selected_orderline;
             if (!selected_orderline) {
-                this.gui.show_popup('notify_popup', {
+                this.gui.show_popup('dialog', {
                     title: 'Error',
                     from: 'top',
                     align: 'center',
@@ -137,29 +259,9 @@ odoo.define('pos_retail.buttons', function (require) {
 
     var button_global_discount = screens.ActionButtonWidget.extend({ // global discounts
         template: 'button_global_discount',
-        renderElement: function(){
-		    var self = this;
-		    this._super();
-		    
-		    var cashier = this.pos.get('cashier') || this.pos.get_cashier();		   
-		    var has_price_control_rights = !this.pos.config.restrict_price_control || cashier.role == 'manager';
-		    
-		    //this.$el.toggleClass('disabled-mode', !has_price_control_rights)		       		        
-		   		        		        
-		    this.$el.click(function(){
-		        self.button_click();
-		    });
-		},
         button_click: function () {
             var list = [];
             var self = this;
-            
-            var cashier = this.pos.get('cashier') || this.pos.get_cashier();		   
-		    var has_price_control_rights = !this.pos.config.restrict_price_control || cashier.role == 'manager';
-            
-            if(!has_price_control_rights){
-            	return;
-            }
             for (var i = 0; i < this.pos.discounts.length; i++) {
                 var discount = this.pos.discounts[i];
                 list.push({
@@ -167,19 +269,23 @@ odoo.define('pos_retail.buttons', function (require) {
                     'item': discount
                 });
             }
-
-            this.gui.show_popup('aarsolselection', {  // changed by AARSOL selection to aarsolselection
+            this.gui.show_popup('selection', {
                 title: _t('Select discount'),
                 list: list,
                 confirm: function (discount) {
                     var order = self.pos.get_order();
-                    //var order = self.pos.get('selectedOrder');
                     order.add_global_discount(discount);
                 }
             });
         }
     });
-    
+    screens.define_action_button({
+        'name': 'button_global_discount',
+        'widget': button_global_discount,
+        'condition': function () {
+            return this.pos.config.discount && this.pos.discounts && this.pos.discounts.length > 0;
+        }
+    });
 
     var button_create_internal_transfer = screens.ActionButtonWidget.extend({  // internal transfer
         template: 'button_create_internal_transfer',
@@ -190,7 +296,7 @@ odoo.define('pos_retail.buttons', function (require) {
             var order = this.pos.get_order();
             var length = order.orderlines.length;
             if (length == 0) {
-                return this.gui.show_popup('confirm', {
+                return this.gui.show_popup('dialog', {
                     title: 'Error',
                     body: 'Your order lines is blank',
                 });
@@ -198,259 +304,15 @@ odoo.define('pos_retail.buttons', function (require) {
                 this.pos.gui.show_popup('popup_internal_transfer', {})
             }
         }
-    });    
-
-    var button_go_invoice_screen = screens.ActionButtonWidget.extend({
-        template: 'button_go_invoice_screen',
-        button_click: function () {
-            this.gui.show_screen('invoices');
-        },
     });
-    
-    var button_kitchen_receipt_screen = screens.ActionButtonWidget.extend({
-        template: 'button_kitchen_receipt_screen',
-        button_click: function () {
-            var order = this.pos.get('selectedOrder');
-            if (order && order.orderlines.length) {
-                this.pos.gui.show_screen('kitchen_receipt_screen');
-            }
-        }
-    });    
 
-    var button_lock_screen = screens.ActionButtonWidget.extend({
-        template: 'button_lock_screen',
-        button_click: function () {
-            this.gui.show_screen('login_page');
-        }
-    });
     screens.define_action_button({
-        'name': 'button_lock_screen',
-        'widget': button_lock_screen,
+        'name': 'button_create_internal_transfer',
+        'widget': button_create_internal_transfer,
         'condition': function () {
-            return this.pos.config.allow_lock_screen == true;
+            return this.pos.config.internal_transfer == true;
         }
     });
-    var reward_button = screens.ActionButtonWidget.extend({
-        template: 'reward_button',
-        validate_loyalty: function (order, reward, amount_with_tax, total_redeem_point) {
-            var client = order.get_client();
-            if (reward['min_amount'] > amount_with_tax) {
-                this.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Reward ' + reward['name'] + ' required min amount bigger than ' + reward['min_amount'],
-                })
-            }
-            if (client['pos_loyalty_point'] <= total_redeem_point) {
-                this.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Point of customer not enough',
-                })
-            }
-            if ((reward['type'] == 'discount_products' || reward['type'] == 'discount_categories') && reward['discount'] <= 0) {
-                this.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Reward ' + reward['name'] + ' have discount amount is 0, could not apply',
-                })
-            }
-        },
-        set_redeem_point: function (line, new_price, redeem_point, rounding) {
-            line.plus_point = 0;
-            line.redeem_point = round_pr(redeem_point, rounding);
-            if (new_price != null) {
-                line.set_unit_price(new_price)
-            }
-            line.trigger('change', line);
-            line.trigger_update_line();
-        },
-        button_click: function () {
-            var list = [];
-            var self = this;
-            var order = self.pos.get('selectedOrder');
-            var client = order.get_client();
-            if (!client) {
-                return setTimeout(function () {
-                    self.pos.gui.show_screen('clientlist');
-                }, 1);
-            }
-            for (var i = 0; i < this.pos.rewards.length; i++) {
-                var item = this.pos.rewards[i];
-                list.push({
-                    'label': item['name'],
-                    'item': item
-                });
-            }
-            if (list.length > 0) {
-                this.gui.show_popup('selection', {
-                    title: _t('Please select Reward program'),
-                    list: list,
-                    confirm: function (reward) {
-                        var applied = false;
-                        var lines = order.orderlines.models;
-                        var amount_with_tax = order.get_total_with_tax();
-                        var total_redeem_point = order.build_redeem_point();
-                        self.validate_loyalty(order, reward, amount_with_tax, total_redeem_point);
-                        if (reward['type'] == 'discount_products') {
-                            for (var i = 0; i < lines.length; i++) {
-                                var curr_line = lines[i];
-                                if (reward['discount_product_ids'].indexOf(curr_line['product']['id']) != -1) {
-                                    var price = curr_line.get_price_with_tax();
-                                    var point_will_redeem = price / 100 * reward['discount'] * reward['coefficient']
-                                    point_will_redeem = round_pr(point_will_redeem, reward['rounding'])
-                                    var next_redeem_point = total_redeem_point + point_will_redeem;
-                                    if (client['pos_loyalty_point'] < next_redeem_point) {
-                                        console.error('limit point')
-                                        break; // dừng vòng lặp khi quá point
-                                    } else {
-                                        var new_price = price - (price / 100 * reward['discount']);
-                                        self.set_redeem_point(curr_line, new_price, point_will_redeem, reward['rounding'])
-                                        applied = true;
-                                    }
-                                }
-                            }
-                        }
-                        else if (reward['type'] == 'discount_categories') {
-                            for (var i = 0; i < lines.length; i++) {
-                                var curr_line = lines[i];
-                                if (reward['discount_category_ids'].indexOf(curr_line['product']['pos_categ_id'][0]) != -1) {
-                                    var price = curr_line.get_price_with_tax();
-                                    var point_will_redeem = price / 100 * reward['discount'] * reward['coefficient']
-                                    point_will_redeem = round_pr(point_will_redeem, reward['rounding'])
-                                    var next_redeem_point = total_redeem_point + point_will_redeem;
-                                    if (client['pos_loyalty_point'] < next_redeem_point) {
-                                        console.error('limit point')
-                                        break; // dừng vòng lặp khi quá point
-                                    } else {
-                                        var new_price = price - (price / 100 * reward['discount']);
-                                        self.set_redeem_point(curr_line, new_price, point_will_redeem, reward['rounding'])
-                                        applied = true;
-                                    }
-                                }
-                            }
-                        }
-                        else if (reward['type'] == 'gift') {
-                            for (item_index in reward['gift_product_ids']) {
-                                var product = self.pos.db.get_product_by_id(reward['gift_product_ids'][item_index])
-                                if (product) {
-                                    var point_will_redeem = product['list_price'] * reward['coefficient'];
-                                    var next_redeem_point = total_redeem_point + point_will_redeem;
-                                    if (client['pos_loyalty_point'] < next_redeem_point) {
-                                        console.error('limit point')
-                                        break; // dừng vòng lặp khi quá point
-                                    } else {
-                                        order.add_product(product, {
-                                            quantity: reward['quantity'],
-                                            price: 0,
-                                            merge: true,
-                                        });
-                                        var selected_line = order.get_selected_orderline();
-                                        self.set_redeem_point(selected_line, null, point_will_redeem, reward['rounding'])
-                                        applied = true;
-                                    }
-                                }
-                            }
-                        }
-                        else if (reward['type'] == 'resale') {
-                            for (var i = 0; i < lines.length; i++) {
-                                var curr_line = lines[i];
-                                if (reward['resale_product_ids'].indexOf(curr_line['product']['id']) != -1) {
-                                    var product = curr_line.product
-                                    var price = product['list_price']
-                                    var point_will_redeem = price - reward['price_resale'] * reward['coefficient'];
-                                    var next_redeem_point = total_redeem_point + point_will_redeem;
-                                    if (client['pos_loyalty_point'] < next_redeem_point) {
-                                        console.error('limit point')
-                                        break; // dừng vòng lặp khi quá point
-                                    } else {
-                                        self.set_redeem_point(curr_line, reward['price_resale'], point_will_redeem, reward['rounding']);
-                                        applied = true;
-                                    }
-                                }
-                            }
-                        }
-                        else if (reward['type'] == 'resale') {
-                            for (var i = 0; i < lines.length; i++) {
-                                var curr_line = lines[i];
-                                if (reward['resale_product_ids'].indexOf(curr_line['product']['id']) != -1) {
-                                    var product = curr_line.product
-                                    var price = product['list_price']
-                                    var point_will_redeem = price - reward['price_resale'] * reward['coefficient'];
-                                    var next_redeem_point = total_redeem_point + point_will_redeem;
-                                    if (client['pos_loyalty_point'] < next_redeem_point) {
-                                        console.error('limit point')
-                                        break; // dừng vòng lặp khi quá point
-                                    } else {
-                                        self.set_redeem_point(curr_line, reward['price_resale'], point_will_redeem, reward['rounding'])
-                                        applied = true;
-                                    }
-                                }
-                            }
-                        }
-                        else if (reward['type'] == 'use_point_payment') {
-                            self.gui.show_popup('number', {
-                                'title': _t('How many point customer need use ?'),
-                                'value': self.format_currency_no_symbol(0),
-                                'confirm': function (point) {
-                                    var total_redeem_point = order.build_redeem_point();
-                                    var next_redeem_point = total_redeem_point + parseFloat(point);
-                                    if (client['pos_loyalty_point'] < next_redeem_point) {
-                                        return self.gui.show_popup('confirm', {
-                                            title: 'ERROR',
-                                            body: 'You can not add total point bigger than: ' + (client['pos_loyalty_point'] - total_redeem_point),
-                                        });
-
-                                    } else {
-                                        var loyalty_id = reward['loyalty_id'][0];
-                                        var loyalty = self.pos.loyalty_by_id[loyalty_id];
-                                        if (loyalty) {
-                                            var product_id = loyalty['product_loyalty_id'][0];
-                                            var product = self.pos.db.get_product_by_id(product_id);
-                                            if (product) {
-                                                var next_amount = amount_with_tax - point * reward['coefficient'];
-                                                if (next_amount >= 0) {
-                                                    order.add_product(product, {
-                                                        quantity: -1,
-                                                        price: point * reward['coefficient'],
-                                                        merge: false,
-                                                    });
-                                                    var selected_line = order.get_selected_orderline();
-                                                    self.set_redeem_point(selected_line, null, point, reward['rounding'])
-                                                    applied = true;
-                                                } else {
-                                                    return self.gui.show_popup('confirm', {
-                                                        title: 'ERROR',
-                                                        body: 'Can not apply this reward because when applied , amount of order will smaller than 0',
-                                                    });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            });
-                        }
-                        if (applied) {
-                            order.trigger('change', order);
-                            return self.gui.show_popup('confirm', {
-                                title: 'Succeed',
-                                body: 'Order applied reward succeed',
-                            });
-                        } else {
-                            return self.gui.show_popup('confirm', {
-                                title: 'Warning',
-                                body: 'This order have not enough conditions apply reward program just selected',
-                            });
-                        }
-
-
-                    }
-                });
-            } else {
-                return this.gui.show_popup('confirm', {
-                    title: 'ERROR',
-                    body: 'Have not any reward programs active',
-                });
-            }
-        }
-    });    
 
     var button_create_purchase_order = screens.ActionButtonWidget.extend({
         template: 'button_create_purchase_order',
@@ -461,7 +323,15 @@ odoo.define('pos_retail.buttons', function (require) {
                 cashregisters: this.pos.cashregisters
             });
         }
-    });    
+    });
+
+    screens.define_action_button({
+        'name': 'button_create_purchase_order',
+        'widget': button_create_purchase_order,
+        'condition': function () {
+            return this.pos.config.create_purchase_order && this.pos.config.purchase_order_state;
+        }
+    });
 
     var button_change_unit = screens.ActionButtonWidget.extend({ // multi unit of measure
         template: 'button_change_unit',
@@ -473,32 +343,32 @@ odoo.define('pos_retail.buttons', function (require) {
                 if (selected_orderline) {
                     selected_orderline.change_unit();
                 } else {
-                    return this.gui.show_popup('confirm', {
+                    return this.gui.show_popup('dialog', {
                         title: 'Warning',
                         body: 'Please select line',
                     });
                 }
             } else {
-                return this.gui.show_popup('confirm', {
+                return this.gui.show_popup('dialog', {
                     title: 'Warning',
                     body: 'Order Lines is empty',
                 });
             }
         }
     });
-    
-    var button_go_pos_orders_screen = screens.ActionButtonWidget.extend({  // pos orders management
-        template: 'button_go_pos_orders_screen',
-        button_click: function () {
-            this.gui.show_screen('pos_orders_screen');
+    screens.define_action_button({
+        'name': 'button_change_unit',
+        'widget': button_change_unit,
+        'condition': function () {
+            return this.pos.config.change_unit_of_measure;
         }
     });
-    
+
     var button_set_tags = screens.ActionButtonWidget.extend({
         template: 'button_set_tags',
         button_click: function () {
             if (!this.pos.tags || this.pos.tags.length == 0) {
-                return this.gui.show_popup('confirm', {
+                return this.gui.show_popup('dialog', {
                     title: 'Warning',
                     body: 'Empty tags, please go to Retail [menu] / Tags and create',
                 });
@@ -509,7 +379,7 @@ odoo.define('pos_retail.buttons', function (require) {
                     title: 'Add tags'
                 });
             } else {
-                return this.gui.show_popup('confirm', {
+                return this.gui.show_popup('dialog', {
                     title: 'Warning',
                     body: 'Please select line',
                 });
@@ -517,7 +387,13 @@ odoo.define('pos_retail.buttons', function (require) {
         }
     });
 
-    
+    screens.define_action_button({
+        'name': 'button_set_tags',
+        'widget': button_set_tags,
+        'condition': function () {
+            return false; // hide
+        }
+    });
     var button_register_payment = screens.ActionButtonWidget.extend({
         template: 'button_register_payment',
         button_click: function () {
@@ -529,125 +405,28 @@ odoo.define('pos_retail.buttons', function (require) {
         }
     });
 
-    
+    screens.define_action_button({
+        'name': 'button_register_payment',
+        'widget': button_register_payment,
+        'condition': function () {
+            return false;
+        }
+    });
     var product_operation_button = screens.ActionButtonWidget.extend({
         template: 'product_operation_button',
         button_click: function () {
-            this.gui.show_screen('productlist');
-        }
-    });
-    
-    var button_add_variants = screens.ActionButtonWidget.extend({
-        template: 'button_add_variants',
-        init: function (parent, options) {
-            this._super(parent, options);
-            this.pos.get('orders').bind('add change', function () {
-                this.renderElement();
-            }, this);
-            this.pos.bind('change:selectedOrder', function () {
-                this.renderElement();
-            }, this);
-        },
-        button_click: function () {
-            var selected_orderline = this.pos.get_order().selected_orderline;
-            if (!selected_orderline) {
-                this.pos.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Please select line',
-                })
-            } else {
-                if (this.pos.variant_by_product_tmpl_id[selected_orderline.product.product_tmpl_id]) {
-                    this.gui.show_popup('popup_selection_variants', {
-                        title: 'Select variants',
-                        variants: this.pos.variant_by_product_tmpl_id[selected_orderline.product.product_tmpl_id],
-                        selected_orderline: selected_orderline
-                    })
-                } else if(selected_orderline.product.product_tmpl_id.variant_categ) { 
-                    products = get_product_by_category(selected_orderline.product.product_tmpl_id.variant_categ_id);
-                    this.gui.show_popup('popup_selection_category_variants', {
-                        title: 'Select variants',
-                        products: products,
-                        default_product: selected_orderline.product.product_tmpl_id.variant_product_id,
-                        selected_orderline: selected_orderline
-                    })
-                } else {
-                    this.pos.gui.show_popup('confirm', {
-                        title: 'Warning',
-                        body: 'Line selected have not variants, please go to Product menu, add variants values.',
-                    })
-                }
-            }
+            this.gui.show_screen('products_operation');
         }
     });
 
-    
-    var button_print_receipt = screens.ActionButtonWidget.extend({
-        template: 'button_print_receipt',
-        button_click: function () {
-            var self = this;
-            var order = this.pos.get_order();
-            if (!order || order.orderlines.length == 0) {
-                return this.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Your Order blank'
-                });
-            }
-            if (this.pos.config.lock_order_printed_receipt) {
-                return this.gui.show_popup('confirm', {
-                    title: _t('Print receipt'),
-                    body: 'If POS-BOX(printer) is ready installed, please got receipt at printer, and so if POS-BOX not installed will print viva web browse',
-                    confirm: function () {
-                        var order = self.pos.get_order();
-                        if (order) {
-                            order['lock'] = true;
-                            this.pos.lock_order();
-                            this.pos.pos_bus.push_message_to_other_sessions({
-                                data: order.uid,
-                                action: 'lock_order',
-                                bus_id: this.pos.config.bus_id[0],
-                                order_uid: order['uid']
-                            });
-                            return self.pos.gui.show_screen('receipt_review');
-                        }
-                    }
-                });
-            } else {
-                return self.pos.gui.show_screen('receipt_review');
-            }
-
-        }
-    });    
-
-    var button_order_signature = screens.ActionButtonWidget.extend({
-        template: 'button_order_signature',
-        button_click: function () {
-            var order = this.pos.get_order();
-            if (order) {
-                this.gui.show_popup('popup_order_signature', {
-                    order: order,
-                    title: 'Signature'
-                });
-            }
-        }
-    });    
-    
-    var button_order_note = screens.ActionButtonWidget.extend({
-        template: 'button_order_note',
-        button_click: function () {
-            var order = this.pos.get_order();
-            if (order) {
-                this.gui.show_popup('aarsoltextarea', {
-                    title: _t('Add Note'),
-                    value: order.get_note(),
-                    confirm: function (note) {
-                        order.set_note(note);
-                        order.trigger('change', order);
-                    }
-                });
-            }
+    screens.define_action_button({
+        'name': 'product_operation_button',
+        'widget': product_operation_button,
+        'condition': function () {
+            return this.pos.config.product_operation;
         }
     });
-    
+
     var button_line_note = screens.ActionButtonWidget.extend({
         template: 'button_line_note',
         button_click: function () {
@@ -661,14 +440,21 @@ odoo.define('pos_retail.buttons', function (require) {
                     }
                 });
             } else {
-                this.pos.gui.show_popup('confirm', {
+                this.pos.gui.show_popup('dialog', {
                     title: 'Warning',
                     body: 'Please select line the first'
                 })
             }
         }
-    });    
-    
+    });
+
+    screens.define_action_button({
+        'name': 'button_line_note',
+        'widget': button_line_note,
+        'condition': function () {
+            return false; // hide
+        }
+    });
     var button_selection_pricelist = screens.ActionButtonWidget.extend({ // version 10 only
         template: 'button_selection_pricelist',
         init: function (parent, options) {
@@ -693,7 +479,7 @@ odoo.define('pos_retail.buttons', function (require) {
                 };
             });
             self.gui.show_popup('selection', {
-                title: _t('Choice one pricelist'),
+                title: _t('choose one pricelist'),
                 list: pricelists,
                 confirm: function (pricelist) {
                     self.pos.gui.close_popup();
@@ -731,49 +517,41 @@ odoo.define('pos_retail.buttons', function (require) {
         button_click: function () {
             this.gui.show_screen('return_products');
         }
-    });    
+    });
 
-    var button_lock_unlock_order = screens.ActionButtonWidget.extend({
-        template: 'button_lock_unlock_order',
-        button_click: function () {
-            var order = this.pos.get_order();
-            order['lock'] = !order['lock'];
-            order.trigger('change', order);
-            if (this.pos.pos_bus) {
-                var action;
-                if (order['lock']) {
-                    action = 'lock_order';
-                    order['userlocked'] = this.pos.config.user_id[0]                    
-                } else {
-                    action = 'unlock_order';
-                }
-                this.pos.pos_bus.push_message_to_other_sessions({
-                    data: order.uid,
-                    action: action,
-                    bus_id: this.pos.config.bus_id[0],
-                    order_uid: order['uid']
-                });
-            } else {
-                this.pos.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: 'Syncing between sessions not active'
-                })
-            }
+    screens.define_action_button({
+        'name': 'button_return_products',
+        'widget': button_return_products,
+        'condition': function () {
+            return this.pos.config.return_products == true;
         }
     });
-    
+
     var button_print_user_card = screens.ActionButtonWidget.extend({
         template: 'button_print_user_card',
         button_click: function () {
-            var user_card_xml = qweb.render('user_card_xml', {
-                user: this.pos.get_cashier()
-            });
-            this.pos.proxy.print_receipt(user_card_xml);
-            return this.pos.gui.show_popup('confirm', {
-                title: 'Hi',
-                body: 'please get user card at your printer'
-            })
+            if (this.pos.config.iface_print_via_proxy) {
+                var user_card_xml = qweb.render('user_card_xml', {
+                    user: this.pos.get_cashier(),
+                    company: this.pos.company
+                });
+                this.pos.proxy.print_receipt(user_card_xml);
+            } else {
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'Your printer and posbox not installed'
+                })
+            }
 
+
+        }
+    });
+
+    screens.define_action_button({
+        'name': 'button_print_user_card',
+        'widget': button_print_user_card,
+        'condition': function () {
+            return this.pos.config.print_user_card == true;
         }
     });
 
@@ -783,7 +561,15 @@ odoo.define('pos_retail.buttons', function (require) {
             this.pos.gui.show_screen('daily_report');
 
         }
-    });    
+    });
+
+    screens.define_action_button({
+        'name': 'button_daily_report',
+        'widget': button_daily_report,
+        'condition': function () {
+            return false; // hide
+        }
+    });
 
     var button_clear_order = screens.ActionButtonWidget.extend({
         template: 'button_clear_order',
@@ -800,158 +586,11 @@ odoo.define('pos_retail.buttons', function (require) {
             }
         }
     });
-    
-
-    var button_booking_order = screens.ActionButtonWidget.extend({
-        template: 'button_booking_order',
-        button_click: function () {
-            var self = this;
-            var order = this.pos.get_order();
-            var pricelist = order['pricelist'];
-            if (!pricelist) {
-                pricelist = this.pos.default_pricelist;
-            }
-            var length = order.orderlines.length;
-            if (!order.get_client()) {
-                return setTimeout(function () {
-                    self.pos.gui.show_screen('clientlist');
-                }, 500);
-            }
-            if (length == 0) {
-                return this.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: "Your order lines is empty",
-                });
-            }
-            return this.gui.show_popup('popup_create_booking_order', {
-                title: 'Create book order',
-                pricelist: pricelist,
-                order: order,
-                client: order.get_client(),
-            });
-        }
-    });    
-
-    var button_go_sale_orders_screen = screens.ActionButtonWidget.extend({
-        template: 'button_go_sale_orders_screen',
-        init: function (parent, options) {
-            this._super(parent, options);
-        },
-        button_click: function () {
-            this.pos.gui.show_screen('sale_orders');
-        }
-    });   
-
-
-    var button_create_sale_order = screens.ActionButtonWidget.extend({
-        template: 'button_create_sale_order',
-        button_click: function () {
-            var self = this;
-            var order = this.pos.get_order();
-            var length = order.orderlines.length;
-            if (!order.get_client()) {
-                return self.pos.gui.show_screen('clientlist');
-            }
-            if (length == 0) {
-                return this.gui.show_popup('confirm', {
-                    title: 'Warning',
-                    body: "Your order lines is empty",
-                });
-            }
-            return this.gui.show_popup('popup_create_sale_order', {
-                title: 'Create sale order',
-                order: order,
-                client: order.get_client(),
-            });
-        }
-    });
-    
-
-    var button_delivery_order = screens.ActionButtonWidget.extend({
-        template: 'button_delivery_order',
-        init: function (parent, options) {
-            this._super(parent, options);
-        },
-        button_click: function () {
-            this.pos.gui.show_screen('payment');
-        }
-    });
-    
-
-    var button_set_location = screens.ActionButtonWidget.extend({
-        template: 'button_set_location',
-        init: function (parent, options) {
-            this._super(parent, options);
-            this.locations_selected = null;
-            this.pos.bind('change:location', function () {
-                this.renderElement();
-            }, this);
-        },
-        button_click: function () {
-            var list = [];
-            var self = this;
-            for (var i = 0; i < this.pos.stock_locations.length; i++) {
-                var location = this.pos.stock_locations[i];
-                list.push({
-                    'label': location.name,
-                    'item': location
-                });
-            }
-            this.gui.show_popup('selection', {
-                title: _t('Check Location'),
-                list: list,
-                confirm: function (location) {
-                    self.pos.set_location(location);
-                    var order = self.pos.get_order();
-                    if (order) {
-                        order.location = location;
-                        order.trigger('change', order);
-                    }
-                    self.locations_selected = location;
-                    return rpc.query({
-                        model: 'pos.cache.database',
-                        method: 'get_on_hand_by_stock_location',
-                        args: [location['id']],
-                        context: {}
-                    }).then(function (datas) {
-                        for (var i = 0; i < self.pos.products.length; i++) {
-                            var product = self.pos.products[i];
-                            var qty_available = datas[product.id];
-                            if (qty_available) {
-                                var $product_el = $("[data-product-id='" + product.id + "'] .qty_available");
-                                product['qty_available'] = qty_available;
-                                $product_el.text(qty_available).show('fast');
-                                if (qty_available > 0) {
-                                    $("[data-product-id='" + product.id + "'] .fa-lock").toggleClass('fa-lock fa-certificate');
-                                    $("[data-product-id='" + product.id + "'] .qty_not_available").toggleClass('qty_not_available qty_available');
-                                } else {
-                                    $("[data-product-id='" + product.id + "'] .fa-certificate").toggleClass('fa-certificate fa-lock');
-                                    $("[data-product-id='" + product.id + "'] .qty_available").toggleClass('qty_available qty_not_available');
-                                }
-                            } else {
-                                $("[data-product-id='" + product.id + "'] .qty_available").text('0').show('fast');
-                                $("[data-product-id='" + product.id + "'] .qty_not_available").text('0').show('fast');
-                                $("[data-product-id='" + product.id + "'] .qty_available").toggleClass('qty_available qty_not_available');
-                                product['qty_available'] = 0;
-                            }
-                        }
-                        self.pos.trigger('change:location');
-                        return self.gui.show_popup('confirm', {
-                            title: 'Location change',
-                            body: 'Location: ' + self.locations_selected['name'] + ' selected.',
-                        });
-                    }).fail(function (type, error) {
-                        return self.pos.query_backend_fail(type, error);
-                    })
-                }
-            });
-        }
-    });
     screens.define_action_button({
-        'name': 'button_set_location',
-        'widget': button_set_location,
+        'name': 'button_clear_order',
+        'widget': button_clear_order,
         'condition': function () {
-            return this.pos.config.multi_location == true;
+            return false; // hide
         }
     });
 
@@ -968,39 +607,28 @@ odoo.define('pos_retail.buttons', function (require) {
                 var config = this.pos.configs[i];
                 if (config.id != this.pos.config['id']) {
                     list.push({
-                        'label': config.user_id[1],
+                        'label': config.name,
                         'item': config
                     });
                 }
             }
-            this.gui.show_popup('selection', {
-                title: _t('Switch to user'),
-                list: list,
-                confirm: function (config) {
-                    def.resolve(config);
-                }
-            });
+            if (list.length > 0) {
+                this.gui.show_popup('selection', {
+                    title: _t('Switch to user'),
+                    list: list,
+                    confirm: function (config) {
+                        def.resolve(config);
+                    }
+                });
+            } else {
+                return this.pos.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'Your system have only one config'
+                });
+            }
             return def.then(function (config) {
                 var user = self.pos.user_by_id[config.user_id[0]];
-                if (user.pos_security_pin) {
-                    return self.pos.gui.ask_password(user.pos_security_pin).then(function () {
-                        var config_id = config.id;
-                        self.pos.ParameterDB.save(self.pos.session.db + '_config_id', config_id);
-                        var web_client = new WebClient();
-                        web_client._title_changed = function () {
-                        };
-                        web_client.show_application = function () {
-                            return web_client.action_manager.do_action("pos.ui");
-                        };
-                        $(function () {
-                            web_client.setElement($(document.body));
-                            web_client.start();
-                        });
-                        return web_client;
-                    });
-                } else {
-                    var config_id = config.id;
-                    self.pos.ParameterDB.save(self.pos.session.db + '_config_id', config_id);
+                if (!user || (user && !user.pos_security_pin)) {
                     var web_client = new WebClient();
                     web_client._title_changed = function () {
                     };
@@ -1013,347 +641,234 @@ odoo.define('pos_retail.buttons', function (require) {
                     });
                     return web_client;
                 }
+                if (user && user.pos_security_pin) {
+                    return self.pos.gui.ask_password(user.pos_security_pin).then(function () {
+                        var web_client = new WebClient();
+                        web_client._title_changed = function () {
+                        };
+                        web_client.show_application = function () {
+                            return web_client.action_manager.do_action("pos.ui");
+                        };
+                        $(function () {
+                            web_client.setElement($(document.body));
+                            web_client.start();
+                        });
+                        return web_client;
+                    });
+                }
             });
         }
     });
-    
-    // fixed discounts  
-	var button_fixed_discount = screens.ActionButtonWidget.extend({ 
-        template: 'button_fixed_discount',        
-        
-        renderElement: function(){
-		    var self = this;
-		    this._super();
-		    
-		    var cashier = this.pos.get('cashier') || this.pos.get_cashier();		   
-		    var has_price_control_rights = !this.pos.config.restrict_price_control || cashier.role == 'manager';
-		    
-		    //this.$el.toggleClass('disabled-mode', !has_price_control_rights)		       		        
-		   		        		        
-		    this.$el.click(function(){
-		        self.button_click();
-		    });
-		},
-		
-        button_click: function(){
-		    var self = this;
-		    
-		    var cashier = this.pos.get('cashier') || this.pos.get_cashier();		   
-		    var has_price_control_rights = !this.pos.config.restrict_price_control || cashier.role == 'manager';
-            
-            if(!has_price_control_rights){
-            	return;
-            }
-		    
-		    this.gui.show_popup('aarsolnumber',{
-		        'title': _t('Fixed Discount'),
-		        'value': '',
-		        'confirm': function(val) {
-		            //val = Math.round(val);
-		            
-		            self.apply_discount(val);
-		            self.gui.close_popup();
-		        },
-		    });
-		},
-		apply_discount: function(pc) {
-		    var self = this;
-		    var order    = self.pos.get_order();		    
-		    var product  = self.pos.db.get_product_by_id(self.pos.config.discount_product_id[0]);
-		    if (product === undefined) {
-		        this.gui.show_popup('error', {
-		            title : _t("No discount Product Found"),
-		            body  : _t("The discount product seems misconfigured. Make sure it is flagged as 'Can be Sold' and 'Available in Point of Sale'."),
-		        });
-		        return;
-		    }
-
-		    // Remove existing discounts
-		    var lines    = order.get_orderlines();
-		    var i = 0;
-		    while ( i < lines.length ) {
-		        if (lines[i].get_product() === product) {
-		            order.remove_orderline(lines[i]);
-		        } else {
-		            i++;
-		        }
-		    }
-
-		    // Add discount
-		    var discount = -pc; //- pc / 100.0 * order.get_total_with_tax();
-
-		    if( discount < 0 ){
-		        var discount_reason = 'Fixed discount on Order '; // +  pc;  // + '[' + discount['amount'] + ']'
-		        order.add_product(product, { price: discount, extras: {discount_reason: discount_reason} });
-		    }
-		},
+    screens.define_action_button({
+        'name': 'button_restart_session',
+        'widget': button_restart_session,
+        'condition': function () {
+            return this.pos.config.switch_user;
+        }
     });
-    
+
     var button_print_last_order = screens.ActionButtonWidget.extend({
         template: 'button_print_last_order',
         button_click: function () {
-            if (this.pos.last_data_print) {
-                this.pos.get('orders').add(this.pos.last_data_print.order);
-                this.pos.set('selectedOrder', this.pos.last_data_print.order);
-                this.pos.gui.show_screen('receipt');
+            if (this.pos.report_xml || this.pos.report_html) {
+                this.pos.gui.show_screen('report');
             } else {
-                this.gui.show_popup('confirm', {
+                this.gui.show_popup('dialog', {
                     'title': _t('Error'),
                     'body': _t('Could not find last order'),
                 });
             }
         },
     });
-    
-       
+
     screens.define_action_button({
         'name': 'button_print_last_order',
         'widget': button_print_last_order,
         'condition': function () {
-            return true;
+            return this.pos.config.print_last_order;
         },
     });
-    
-    screens.define_action_button({
-        'name': 'button_print_voucher',
-        'widget': button_print_voucher,
-        'condition': function () {
-            return this.pos.config.print_voucher;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_lock_unlock_order',
-        'widget': button_lock_unlock_order,
-        'condition': function () {
-            return this.pos.config.lock_order_printed_receipt == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_create_internal_transfer',
-        'widget': button_create_internal_transfer,
-        'condition': function () {
-            return this.pos.config.internal_transfer == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_create_sale_order',
-        'widget': button_create_sale_order,
-        'condition': function () {
-            return this.pos.config.sale_order;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_kitchen_receipt_screen',
-        'widget': button_kitchen_receipt_screen,
-        'condition': function () {
-            return this.pos.printers && this.pos.printers.length;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_restart_session',
-        'widget': button_restart_session,
-        'condition': function () {
-            return false;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_create_purchase_order',
-        'widget': button_create_purchase_order,
-        'condition': function () {
-            return this.pos.config.create_purchase_order && this.pos.config.purchase_order_state;
-        }
-    });   
-    
-    screens.define_action_button({
-        'name': 'button_go_invoice_screen',
-        'widget': button_go_invoice_screen,
-        'condition': function () {
-            return this.pos.config.management_invoice == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_combo',
-        'widget': button_combo,
-        'condition': function () {
-            return this.pos.combo_items && this.pos.combo_items.length > 0;
-        }
-    });
-        
-    screens.define_action_button({
-        'name': 'button_add_variants',
-        'widget': button_add_variants,
-        'condition': function () {
-            return this.pos.variants && this.pos.variants.length > 0;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'product_operation_button',
-        'widget': product_operation_button,
-        'condition': function () {
-            return this.pos.config.product_operation;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_promotion',
-        'widget': button_promotion,
-        'condition': function () {
-            return this.pos.config.promotion == true && this.pos.promotion_ids.length && this.pos.promotion_ids.length >= 1;
-        }
-    });    
-    
-    
-    screens.define_action_button({
-        'name': 'button_delivery_order',
-        'widget': button_delivery_order,
-        'condition': function () {
-            return this.pos.config.delivery_orders == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_go_sale_orders_screen',
-        'widget': button_go_sale_orders_screen,
-        'condition': function () {
-            return this.pos.config.delivery_orders == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_booking_order',
-        'widget': button_booking_order,
-        'condition': function () {
-            return this.pos.config.booking_orders;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_return_products',
-        'widget': button_return_products,
-        'condition': function () {
-            return this.pos.config.return_products == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_go_pos_orders_screen',
-        'widget': button_go_pos_orders_screen,
-        'condition': function () {
-            return this.pos.config.pos_orders_management == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'reward_button',
-        'widget': reward_button,
-        'condition': function () {
-            return this.pos.rules && this.pos.rules.length && this.pos.rules.length > 0;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_print_user_card',
-        'widget': button_print_user_card,
-        'condition': function () {
-            return this.pos.config.print_user_card == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_line_note',
-        'widget': button_line_note,
-        'condition': function () {
-            return this.pos.config.note_orderline == true;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_order_note',
-        'widget': button_order_note,
-        'condition': function () {
-            return this.pos.config.note_order == true;
-        }
-    });  
-    
-    screens.define_action_button({
-        'name': 'button_fixed_discount',
-        'widget': button_fixed_discount,
-        'condition': function () {
-            return this.pos.config.fixed_pos_discount && this.pos.config.discount_product_id;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_global_discount',
-        'widget': button_global_discount,
-        'condition': function () {
-            return this.pos.config.discount && this.pos.discounts && this.pos.discounts.length > 0;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_change_unit',
-        'widget': button_change_unit,
-        'condition': function () {
-            return false; // hide
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_set_tags',
-        'widget': button_set_tags,
-        'condition': function () {
-            return false; // hide
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_register_payment',
-        'widget': button_register_payment,
-        'condition': function () {
-            return false;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_print_receipt',
-        'widget': button_print_receipt,
-        'condition': function () {
-            return false; // hide
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_daily_report',
-        'widget': button_daily_report,
-        'condition': function () {
-            return false; // hide
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_order_signature',
-        'widget': button_order_signature,
-        'condition': function () {
-            return this.pos.config.signature_order;
-        }
-    });
-    
-    screens.define_action_button({
-        'name': 'button_clear_order',
-        'widget': button_clear_order,
-        'condition': function () {
-            return false; // hide
-        }
-    });
-    
 
+    var button_medical_insurance_screen = screens.ActionButtonWidget.extend({
+        template: 'button_medical_insurance_screen',
+        button_click: function () {
+            return this.pos.gui.show_screen('medical_insurance_screen')
+        },
+        init: function (parent, options) {
+            this._super(parent, options);
+            this.pos.bind('change:medical_insurance', function () {
+                this.renderElement();
+                var order = this.pos.get_order();
+                order.trigger('change', order);
+            }, this);
+        },
+    });
+
+    screens.define_action_button({
+        'name': 'button_medical_insurance_screen',
+        'widget': button_medical_insurance_screen,
+        'condition': function () {
+            return this.pos.config.medical_insurance;
+        },
+    });
+
+    var button_set_guest = screens.ActionButtonWidget.extend({
+        template: 'button_set_guest',
+        button_click: function () {
+            return this.pos.gui.show_popup('popup_set_guest', {
+                title: _t('Add guest'),
+                confirm: function (values) {
+                    if (!values['guest'] || !values['guest']) {
+                        return this.pos.gui.show_popup('dialog', {
+                            title: 'Error',
+                            body: 'Field guest name and guest number is required'
+                        })
+                    } else {
+                        var order = this.pos.get_order();
+                        if (order) {
+                            order['guest'] = values['guest'];
+                            order['guest_number'] = values['guest_number'];
+                            order.trigger('change', order);
+                            this.pos.trigger('change:guest');
+                        }
+                    }
+                }
+            });
+        },
+        init: function (parent, options) {
+            var self = this;
+            this._super(parent, options);
+            this.pos.bind('change:guest', function () {
+                this.renderElement();
+                var order = this.pos.get_order();
+                order.trigger('change', order);
+            }, this);
+            if (this.pos.config.set_guest_when_add_new_order) {
+                this.pos.get('orders').bind('add', function () {
+                    setTimeout(function () {
+                        self.button_click()
+                    }, 1000);
+
+                }, this);
+            }
+        },
+    });
+
+    screens.define_action_button({
+        'name': 'button_set_guest',
+        'widget': button_set_guest,
+        'condition': function () {
+            return this.pos.config.set_guest;
+        },
+    });
+
+    var button_reset_sequence = screens.ActionButtonWidget.extend({
+        template: 'button_reset_sequence',
+        button_click: function () {
+            this.pos.pos_session.sequence_number = 0;
+            return this.pos.gui.show_popup('dialog', {
+                title: 'Done',
+                body: 'You just set sequence number to 0',
+                color: 'success'
+            })
+        },
+        init: function (parent, options) {
+            this._super(parent, options);
+            this.pos.bind('change:guest', function () {
+                this.renderElement();
+                var order = this.pos.get_order();
+                order.trigger('change', order);
+            }, this);
+        },
+    });
+
+    screens.define_action_button({
+        'name': 'button_reset_sequence',
+        'widget': button_reset_sequence,
+        'condition': function () {
+            return this.pos.config.reset_sequence;
+        },
+    });
+
+    var button_change_tax = screens.ActionButtonWidget.extend({
+        template: 'button_change_tax',
+        init: function (parent, options) {
+            this._super(parent, options);
+        },
+        button_click: function () {
+            var self = this;
+            var order = this.pos.get_order();
+            var taxes = [];
+            var update_tax_ids = this.pos.config.update_tax_ids || [];
+            for (var i = 0; i < this.pos.taxes.length; i++) {
+                var tax = this.pos.taxes[i];
+                if (update_tax_ids.indexOf(tax.id) != -1) {
+                    taxes.push(tax)
+                }
+            }
+            if (order.get_selected_orderline() && taxes.length) {
+                var line_selected = order.get_selected_orderline();
+                return this.gui.show_popup('popup_select_tax', {
+                    title: 'Please choose tax',
+                    line_selected: line_selected,
+                    taxes: taxes,
+                    confirm: function () {
+                        return self.pos.gui.close_popup();
+                    },
+                    cancel: function () {
+                        return self.pos.gui.close_popup();
+                    }
+                });
+            } else {
+                return this.gui.show_popup('dialog', {
+                    title: _t('Warning'),
+                    body: ('Please select line before add taxes or update taxes on pos config not setting')
+                });
+            }
+        }
+    });
+
+    screens.define_action_button({
+        'name': 'button_change_tax',
+        'widget': button_change_tax,
+        'condition': function () {
+            return this.pos.config && this.pos.config.update_tax;
+        }
+    });
+
+    var button_turn_onoff_printer = screens.ActionButtonWidget.extend({
+        template: 'button_turn_onoff_printer',
+        button_click: function () {
+            if (this.pos.config.iface_print_via_proxy) {
+                this.pos.gui.show_popup('dialog', {
+                    title: 'Turn on',
+                    body: 'Your printer ready for print any orders receipt',
+                    color: 'success'
+                })
+            } else {
+                this.pos.gui.show_popup('dialog', {
+                    title: 'Turn off',
+                    body: 'Your printer turn off, orders receipt will print via web browse'
+                })
+            }
+            this.pos.config.iface_print_via_proxy = !this.pos.config.iface_print_via_proxy;
+            this.pos.trigger('onoff:printer');
+        },
+        init: function (parent, options) {
+            this._super(parent, options);
+            this.pos.bind('onoff:printer', function () {
+                this.renderElement();
+                var order = this.pos.get_order();
+                order.trigger('change', order);
+            }, this);
+        }
+    });
+
+    screens.define_action_button({
+        'name': 'button_turn_onoff_printer',
+        'widget': button_turn_onoff_printer,
+        'condition': function () {
+            return this.pos.config.printer_on_off;
+        }
+    });
 });

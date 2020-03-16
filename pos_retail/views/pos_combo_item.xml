@@ -15,7 +15,7 @@
                                 <field name="uom_id"/>
                                 <field name="quantity"/>
                             </group>
-                            <group>                                
+                            <group>
                                 <field name="default"/>
                                 <field name="tracking"/>
                             </group>
@@ -62,7 +62,8 @@
 
         <menuitem id="menu_pos_combo_item"
                   action="pos_combo_item_action"
-                  parent="menu_retail"
+                  parent="menu_master_data"
+                  sequence="4"
         />
 
     </data>

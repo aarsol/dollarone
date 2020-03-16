@@ -19,13 +19,13 @@ class purchase_order(models.Model):
                 if version_info == 10:
                     transfer = self.env['stock.immediate.transfer'].create({'pick_id': picking.id})
                     transfer.process()
-                if version_info == 11:
+                if version_info in [11, 12]:
                     for move_line in picking.move_line_ids:
                         move_line.write({'qty_done': move_line.product_uom_qty})
                     for move_line in picking.move_lines:
                         move_line.write({'quantity_done': move_line.product_uom_qty})
                     picking.button_validate()
-        if purchase_order_state == 'confirm_invoice':
+        if purchase_order_state == 'confirm_invoice' and version_info != 13:
             partner = po.partner_id
             account_id = partner.property_account_payable_id.id
             invoice = None
@@ -39,7 +39,7 @@ class purchase_order(models.Model):
                     'purchase_id': po.id,
                     'payment_term_id': partner.property_payment_term_id.id if partner.property_payment_term_id else None,
                 })
-            if version_info == 11:
+            if version_info in [11, 12]:
                 invoice = self.env['account.invoice'].create({
                     'type': 'in_invoice',
                     'currency_id': po.currency_id.id,

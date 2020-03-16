@@ -69,8 +69,9 @@
 
         <menuitem id="menu_res_partner_credit_action"
             action="res_partner_credit_action"
-            parent="menu_retail"
-            />
+            parent="menu_clients"
+            sequence="4"
+        />
 
     </data>
 </odoo>

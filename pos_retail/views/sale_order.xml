@@ -2,6 +2,7 @@
 <odoo>
     <data>
 
+        <!-- v11 only
         <record id="view_sale_order_line_form" model="ir.ui.view">
             <field name="name">sale.order.line.form</field>
             <field name="model">sale.order.line</field>
@@ -50,7 +51,7 @@
                 </form>
             </field>
         </record>
-
+        -->
 
         <record id="booking_order_quotation_tree" model="ir.ui.view">
             <field name="name">quotation.tree.retail.inherit</field>
@@ -75,6 +76,7 @@
             <field name="inherit_id" ref="sale.view_order_tree"/>
             <field name="arch" type="xml">
                 <field name="state" position="after">
+                    <field name="ean13"/>
                     <field name="book_order"/>
                     <field name="delivery_phone"/>
                     <field name="delivery_date"/>
@@ -91,6 +93,7 @@
             <field name="inherit_id" ref="sale.view_order_form"/>
             <field name="arch" type="xml">
                 <xpath expr="//field[@name='payment_term_id']" position="after">
+                    <field name="ean13"/>
                     <field name="book_order"/>
                     <field name="delivery_phone" attrs="{'invisible': [('book_order', '=', False)]}"/>
                     <field name="delivery_address" attrs="{'invisible': [('book_order', '=', False)]}"/>
@@ -100,11 +103,10 @@
                     <field name="signature" widget='image' readonly="1"
                            attrs="{'invisible': [('book_order', '=', False)]}"/>
                 </xpath>
-                <!--
-                <xpath expr="//field[@name='order_line']/tree/field[@name='currency_id']" position="after">
-                    <button name="insert_line" string="Insert row" type="object" states="draft" class="btn-primary"/>
+                <xpath expr="//field[@name='order_line']//tree/field[@name='state']" position="before">
+                    <field name="variant_ids" widget="many2many_tags"/>
+                    <field name="pos_note"/>
                 </xpath>
-                -->
             </field>
         </record>
 

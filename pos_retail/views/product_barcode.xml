@@ -64,7 +64,8 @@
 
         <menuitem id="menu_product_barcode"
                   action="product_barcode_action"
-                  parent="menu_retail"
+                  parent="menu_master_data"
+                  sequence="18"
         />
 
     </data>

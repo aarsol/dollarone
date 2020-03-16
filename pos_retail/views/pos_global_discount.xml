@@ -55,7 +55,8 @@
 
         <menuitem id="menu_action_global_pos_discount"
                   action="action_global_pos_discount"
-                  parent="menu_retail"
+                  parent="menu_master_data"
+                  sequence="6"
         />
 
     </data>

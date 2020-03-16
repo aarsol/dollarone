@@ -5,21 +5,289 @@
  */
 odoo.define('pos_retail.model', function (require) {
     var models = require('point_of_sale.models');
-    var time = require('web.time');
     var utils = require('web.utils');
     var core = require('web.core');
     var round_pr = utils.round_precision;
     var _t = core._t;
     var rpc = require('pos.rpc');
-    var big_data = require('pos_retail.big_data');
     var session = require('web.session');
     var time = require('web.time');
 
     var _super_PosModel = models.PosModel.prototype;
     models.PosModel = models.PosModel.extend({
+        generate_wrapped_name: function (name) {
+            var MAX_LENGTH = 24; // 40 * line ratio of .6
+            var wrapped = [];
+            var current_line = "";
+
+            while (name.length > 0) {
+                var space_index = name.indexOf(" ");
+
+                if (space_index === -1) {
+                    space_index = name.length;
+                }
+
+                if (current_line.length + space_index > MAX_LENGTH) {
+                    if (current_line.length) {
+                        wrapped.push(current_line);
+                    }
+                    current_line = "";
+                }
+
+                current_line += name.slice(0, space_index + 1);
+                name = name.slice(space_index + 1);
+            }
+
+            if (current_line.length) {
+                wrapped.push(current_line);
+            }
+
+            return wrapped;
+        },
+        update_onhand_by_product: function (product) {
+            var self = this;
+            this.product_need_update = product;
+            return rpc.query({
+                model: 'pos.cache.database',
+                method: 'get_onhand_by_product_id',
+                args: [product.id],
+                context: {}
+            }, {shadow: true}).then(function (datas) {
+                var list = [];
+                if (!datas || !self.stock_location_by_id) {
+                    return false;
+                }
+                for (var location_id in datas) {
+                    var location = self.stock_location_by_id[location_id];
+                    if (location) {
+                        list.push({
+                            'id': location['id'],
+                            'location': location['name'],
+                            'qty_available': datas[location_id]['qty_available']
+                        })
+                    }
+                }
+                if (list.length <= 0) {
+                    self.gui.show_popup('dialog', {
+                        title: 'Warning',
+                        body: 'Product type not Stockable Product'
+                    })
+                } else {
+                    return self.gui.show_popup('popup_selection_extend', {
+                        title: 'All Quantity Available of Product ' + self.product_need_update.name,
+                        fields: ['location', 'qty_available'],
+                        sub_datas: list,
+                        sub_template: 'stocks_list',
+                        confirm: function (location_id) {
+                            self.location_id = location_id;
+                            var location = self.stock_location_by_id[location_id];
+                            setTimeout(function () {
+                                return self.gui.show_popup('number', {
+                                    'title': _t('Update Product Quantity of ' + self.product_need_update.name + ' to Location ' + location.name),
+                                    'value': 0,
+                                    'confirm': function (new_quantity) {
+                                        var new_quantity = parseFloat(new_quantity);
+                                        return rpc.query({
+                                            model: 'stock.location',
+                                            method: 'pos_update_stock_on_hand_by_location_id',
+                                            args: [location.id, {
+                                                product_id: self.product_need_update.id,
+                                                new_quantity: new_quantity,
+                                                location_id: location.id
+                                            }],
+                                            context: {}
+                                        }, {shadow: true}).done(function (values) {
+                                            self._do_update_quantity_onhand([self.product_need_update.id]);
+                                            return self.gui.show_popup('confirm', {
+                                                title: values['product'],
+                                                body: values['location'] + ' have new on hand: ' + values['quantity'],
+                                                color: 'success'
+                                            })
+                                        }).fail(function (error) {
+                                            return self.query_backend_fail(error);
+                                        })
+                                    }
+                                })
+                            }, 200)
+                        }
+                    })
+                }
+            }).fail(function (error) {
+                return self.query_backend_fail(error);
+            })
+        },
+        show_purchased_histories: function (client) {
+            var self = this;
+            if (!client) {
+                client = this.get_client();
+            }
+            if (!client) {
+                this.gui.show_popup('dialog', {
+                    title: 'Warning',
+                    body: 'We could not find purchased orders histories, please set client first'
+                });
+                this.gui.show_screen('clientlist')
+            } else {
+                var orders = this.db.get_pos_orders().filter(function (order) {
+                    return order.partner_id && order.partner_id[0] == client['id']
+                });
+                if (orders.length) {
+                    return this.gui.show_popup('popup_selection_extend', {
+                        title: 'Purchased Histories of ' + client.name,
+                        fields: ['name', 'ean13', 'date_order', 'pos_reference'],
+                        sub_datas: orders,
+                        sub_template: 'purchased_orders',
+                        body: 'Please select one sale person',
+                        confirm: function (order_id) {
+                            var order = self.db.order_by_id[order_id];
+                            self.gui.screen_instances['pos_orders_screen'].order_selected = order;
+                            self.gui.show_screen('pos_orders_screen')
+                        }
+                    })
+                } else {
+                    this.gui.show_popup('confirm', {
+                        title: 'Warning',
+                        body: 'Your POS not active POS Order Management or Current Client have not any Purchased Orders'
+                    })
+                }
+            }
+        },
+        _get_stock_on_hand_by_location_ids: function (product_ids = [], location_ids = []) {
+            var response = new $.Deferred();
+            rpc.query({
+                model: 'stock.location',
+                method: 'get_stock_datas',
+                args: [[], product_ids, location_ids],
+                context: {}
+            }, {shadow: true, timeout: 60000}).then(function (datas) {
+                response.resolve(datas)
+            }).fail(function (error) {
+                response.reject(error)
+            });
+            return response;
+        },
+        _validate_by_manager: function (action_will_do_if_passing_security) {
+            var self = this;
+            var manager_validate = [];
+            _.each(this.config.manager_ids, function (user_id) {
+                var user = self.user_by_id[user_id];
+                if (user) {
+                    manager_validate.push({
+                        label: user.name,
+                        item: user
+                    })
+                }
+            });
+            if (manager_validate.length == 0) {
+                this.gui.show_popup('confirm', {
+                    title: 'Warning',
+                    body: 'Your POS Setting / Tab Security not set Managers Approve',
+                })
+            }
+            return this.gui.show_popup('selection', {
+                title: 'Choice Manager Validate',
+                body: 'Only Manager can approve this Discount, please ask him',
+                list: manager_validate,
+                confirm: function (manager_user) {
+                    if (!manager_user.pos_security_pin) {
+                        return self.gui.show_popup('confirm', {
+                            title: 'Warning',
+                            body: user.name + ' have not set pos security pin before. Please set pos security pin first'
+                        })
+                    } else {
+                        return self.gui.show_popup('ask_password', {
+                            title: 'Pos Security Pin of Manager',
+                            body: _t('This action need validate by you, please input your pos secuirty pin'),
+                            confirm: function (password) {
+                                if (manager_user['pos_security_pin'] != password) {
+                                    self.gui.show_popup('dialog', {
+                                        title: 'Error',
+                                        body: 'Pos Security Pin of ' + manager_user.name + ' Incorrect !'
+                                    });
+                                    setTimeout(function () {
+                                        self._validate_by_manager(action_will_do_if_passing_security);
+                                    }, 1000)
+                                } else {
+                                    eval(action_will_do_if_passing_security);
+                                }
+                            }
+                        });
+                    }
+                }
+            })
+        },
+        _search_read_by_model_and_id: function (model, ids) {
+            var status = new $.Deferred();
+            var object = this.get_model(model);
+            if (model && object.fields) {
+                rpc.query({
+                    model: model,
+                    method: 'search_read',
+                    domain: [['id', 'in', ids]],
+                    fields: object.fields
+                }).then(function (datas) {
+                    status.resolve(datas)
+                }).fail(function (error) {
+                    status.reject(error)
+                })
+            } else {
+                status.resolve([])
+            }
+            return status
+
+        }
+        ,
+        _update_cart_qty_by_order: function (product_ids) {
+            var order = this.get_order();
+            if (!order) {
+                return;
+            }
+            for (var i = 0; i < product_ids.length; i++) {
+                var product_id = product_ids[i];
+                if (this.server_version != 12) {
+                    var $qty = $('span[data-product-id="' + product_id + '"] .cart_qty');
+                } else {
+                    var $qty = $('article[data-product-id="' + product_id + '"] .cart_qty');
+                }
+                var product_quantity_by_product_id = order.product_quantity_by_product_id();
+                var qty = product_quantity_by_product_id[product_id];
+                if (qty) {
+                    $qty.removeClass('oe_hidden');
+                    $qty.html(qty);
+                } else {
+                    $qty.addClass('oe_hidden');
+                }
+            }
+
+        }
+        ,
+        _get_active_pricelist: function () {
+            var current_order = this.get_order();
+            var default_pricelist = this.default_pricelist;
+            if (current_order && current_order.pricelist) {
+                var pricelist = _.find(this.pricelists, function (pricelist_check) {
+                    return pricelist_check['id'] == current_order.pricelist['id']
+                });
+                return pricelist;
+            } else {
+                if (default_pricelist) {
+                    var pricelist = _.find(this.pricelists, function (pricelist_check) {
+                        return pricelist_check['id'] == default_pricelist['id']
+                    });
+                    return pricelist
+                } else {
+                    return null
+                }
+            }
+        }
+        ,
+        _get_default_pricelist: function () {
+            var current_pricelist = this.default_pricelist;
+            return current_pricelist
+        },
         get_model: function (_name) {
-            var _index = this.models.map(function (e) {
-                return e.model;
+            var _index = this.models.map(function (model) {
+                return model.model;
             }).indexOf(_name);
             if (_index > -1) {
                 return this.models[_index];
@@ -28,107 +296,61 @@ odoo.define('pos_retail.model', function (require) {
         },
         initialize: function (session, attributes) {
             var self = this;
-            this.minLength = 3; // min length auto complete search
             this.server_version = session.server_version_info[0];
-
-            if (this.server_version == 10) {
-                var wait_pricelist = this.get_model('product.pricelist');
-                wait_pricelist.ids = [];
-                wait_pricelist.fields = [];
-                var _wait_super_loaded = wait_pricelist.loaded;
-                wait_pricelist.loaded = function (self, pricelists) {
-                    _wait_super_loaded(self, pricelists);
-                    self.pricelist_by_id = {};
-                    self.default_pricelist = _.find(pricelists, {id: self.config.pricelist_id[0]});
-                    self.pricelists = pricelists;
-                    _.map(pricelists, function (pricelist) {
-                        pricelist.items = [];
-                        self.pricelist_by_id[pricelist['id']] = pricelist;
-                    });
-                };
-            }
+            this.is_mobile = odoo.is_mobile;
             var wait_journal = this.get_model('account.journal');
-            wait_journal.fields.push('pos_method_type');
-
+            wait_journal.fields.push('pos_method_type', 'currency_id');
+            var _super_wait_journal_loaded = wait_journal.loaded;
+            wait_journal.loaded = function (self, journals) {
+                self.journals = journals;
+                self.journal_by_id = {};
+                for (var i = 0; i < journals.length; i++) {
+                    self.journal_by_id[journals[i]['id']] = journals[i];
+                }
+                _super_wait_journal_loaded(self, journals);
+            };
+            var account_tax_model = this.get_model('account.tax');
+            account_tax_model.fields.push('type_tax_use');
             var wait_currency = this.get_model('res.currency');
             wait_currency.fields.push(
                 'rate'
             );
-            var _wait_super_currency_loaded = wait_currency.loaded;
-            wait_currency.loaded = function (self, currencies) {
-                _wait_super_currency_loaded(self, currencies);
-                self.currency_by_id = {};
-                self.currencies = currencies;
-                var i = 0
-                while (i < currencies.length) {
-                    self.currency_by_id[currencies[i].id] = currencies[i];
-                    i++
-                }
-                var cashregisters = self.cashregisters;
-                debugger;
-                for (var i = 0; i < cashregisters.length; i++) {
-                    var cashregister = cashregisters[i];
-                    var currency = self.currency_by_id[cashregister['currency_id'][0]];
-                    if (cashregister['currency_id'] && cashregister['currency_id'][0] && currency && currency['rate']) {
-                        cashregister['rate'] = currency['rate']
-                    }
-                }
-            };
-            
-            var product_pricelist_item_model = this.get_model('product.pricelist.item');
-            var _super_product_pricelist_item_loaded = product_pricelist_item_model.loaded;
-            product_pricelist_item_model.loaded = function (self, pricelist_items) {
-                // *************************************
-                // if pricelist active == false
-                // no need loads items
-                // *************************************
-                var new_items = [];
-                var pricelist_by_id = {};
-                _.each(self.pricelists, function (pricelist) {
-                    pricelist_by_id[pricelist.id] = pricelist;
-                });
-
-                _.each(pricelist_items, function (item) {
-                    var pricelist = pricelist_by_id[item.pricelist_id[0]];
-                    if (pricelist) {
-                        new_items.push(item)
-                    }
-                });
-                _super_product_pricelist_item_loaded(self, new_items);
-            };
-
             var pos_category_model = this.get_model('pos.category');
             var _super_pos_category_loaded = pos_category_model.loaded;
             pos_category_model.loaded = function (self, categories) {
                 _super_pos_category_loaded(self, categories);
                 self.categories = categories;
             };
-
-            var res_partner_model = this.get_model('res.partner');
-            var _super_loaded_res_partner_model = res_partner_model.loaded;
-            res_partner_model.loaded = function (self, partners) {
-                var suppliers = _.filter(partners, function (partner) {
-                    return partner['supplier'] == true;
+            var account_fiscal_position_tax_model = this.get_model('account.fiscal.position.tax');
+            var _super_account_fiscal_position_tax_model_loaded = account_fiscal_position_tax_model.loaded;
+            account_fiscal_position_tax_model.loaded = function (self, fiscal_position_taxes) {
+                fiscal_position_taxes = _.filter(fiscal_position_taxes, function (tax) {
+                    return tax.tax_dest_id != false;
                 });
-                _super_loaded_res_partner_model(self, partners);
-                self.db.add_suppliers(suppliers);
+                if (fiscal_position_taxes.length > 0) {
+                    _super_account_fiscal_position_tax_model_loaded(self, fiscal_position_taxes);
+                }
             };
-
+            var pos_category_model = this.get_model('pos.category');
+            var _super_loaded_pos_category_model = pos_category_model.loaded;
+            pos_category_model.loaded = function (self, categories) {
+                self.pos_categories = categories;
+                _super_loaded_pos_category_model(self, categories);
+            };
             var product_model = this.get_model('product.product');
+            this.product_model = product_model;
             product_model.fields.push(
+                'name',
                 'is_credit',
                 'multi_category',
                 'multi_uom',
                 'multi_variant',
                 'supplier_barcode',
-                'manufacturing_out_of_stock',
-                'manufacturing_state',
                 'is_combo',
                 'combo_limit',
                 'uom_po_id',
                 'barcode_ids',
                 'pos_categ_ids',
-                'qty_available',
                 'supplier_taxes_id',
                 'volume',
                 'weight',
@@ -136,24 +358,16 @@ odoo.define('pos_retail.model', function (require) {
                 'description_picking',
                 'type',
                 'cross_selling',
-                'suggestion_sale',
                 'standard_price',
-                'name',
-                'color',
-                'variant_categ',
-                'variant_categ_id',
-                'variant_product_id',
-                'is_prop',
-                  
-                
-                // name and color added by AARSOL
+                'pos_sequence',
+                'is_voucher',
+                'minimum_list_price',
+                'sale_with_package',
+                'qty_warning_out_stock',
+                'write_date',
+                'company_id',
             );
             this.bus_location = null;
-            
-            // Company model added by AARSOL
-            var company_model = this.get_model('res.company');
-            company_model.fields.push('street','city');
-            
             var partner_model = this.get_model('res.partner');
             partner_model.fields.push(
                 'ref',
@@ -167,46 +381,56 @@ odoo.define('pos_retail.model', function (require) {
                 'balance',
                 'limit_debit',
                 'wallet',
-                'pos_loyalty_point',
-                'pos_loyalty_type',
                 'property_product_pricelist',
                 'property_payment_term_id',
-
+                'is_company',
+                'write_date',
+                'birthday_date',
+                'group_ids'
             );
             if (this.server_version == 10) {
-                partner_model.fields.push('property_product_pricelist')
+                partner_model.fields.push('property_product_pricelist');
+                var _wait_super_currency_loaded = wait_currency.loaded;
+                wait_currency.loaded = function (self, currency) {
+                    self.company_currency = currency;
+                    _wait_super_currency_loaded(self, currency);
+                };
+            }
+            if (this.server_version != 10) {
+                var pricelist_model = this.get_model('product.pricelist');
+                pricelist_model['pricelist'] = true;
+                var pricelist_item_model = this.get_model('product.pricelist.item');
+                pricelist_item_model['pricelist'] = true;
             }
             _super_PosModel.initialize.apply(this, arguments);
-            this.bind('change:selectedOrder', function () {
-                var selectedOrder = self.get_order();
-                if (self.pos_bus && self.config && self.config.bus_id[0] && selectedOrder) {
-                    self.pos_bus.push_message_to_other_sessions({
-                        action: 'selected_order',
-                        data: {
-                            uid: selectedOrder['uid']
-                        },
-                        bus_id: self.config.bus_id[0],
-                        order_uid: selectedOrder['uid'],
-                    });
-                }
-            });
             this.get('orders').bind('change add remove', function (order) {
                 self.trigger('update:table-list');
             });
-
-        },
+            var wait_res_company = this.get_model('res.company');
+            wait_res_company.fields.push('logo');
+        }
+        ,
         add_new_order: function () {
-            var order = _super_PosModel.add_new_order.apply(this, arguments);
+            var self = this;
+            _super_PosModel.add_new_order.apply(this, arguments);
+            var order = this.get_order();
             var client = order.get_client();
             if (!client && this.config.customer_default_id) {
-                var client = this.db.get_partner_by_id(this.config.customer_default_id[0]);
-                if (client) {
-                    order.set_client(client);
-                    order.trigger('change', order);
+                var client_default = this.db.get_partner_by_id(this.config.customer_default_id[0]);
+                var order = this.get_order();
+                if (client_default && order) {
+                    setTimeout(function () {
+                        order.set_client(client_default);
+                    }, 500);
                 }
             }
-            return order;
-        },
+            if (!client && this.config.add_customer_before_products_already_in_shopping_cart) {
+                setTimeout(function () {
+                    self.gui.show_screen('clientlist');
+                }, 500);
+            }
+        }
+        ,
         formatDateTime: function (value, field, options) {
             if (value === false) {
                 return "";
@@ -215,7 +439,8 @@ odoo.define('pos_retail.model', function (require) {
                 value = value.clone().add(session.getTZOffset(value), 'minutes');
             }
             return value.format(time.getLangDatetimeFormat());
-        },
+        }
+        ,
         format_date: function (date) { // covert datetime backend to pos
             if (date) {
                 return this.formatDateTime(
@@ -229,33 +454,121 @@ odoo.define('pos_retail.model', function (require) {
             return this.config;
         }
         ,
-        get_location: function () {
-            if (!this.location) {
-                var location = this.stock_location_by_id[this.config.stock_location_id[0]];
-                return location
+        get_packaging_by_product: function (product) {
+            if (!this.packaging_by_product_id || !this.packaging_by_product_id[product.id]) {
+                return false;
             } else {
-                return this.location;
+                return true
             }
         }
         ,
-        set_location: function (location) {
-            this.location = location;
+        get_locations: function () {
+            if (this.stock_location_ids.length != 0) {
+                return this.stock_location_ids
+            } else {
+                return []
+            }
         }
         ,
-        // get price with tax for v10
-        get_price_with_tax: function (product) {
-            var price = product['price'];
+        get_default_sale_journal: function () {
+            var invoice_journal_id = this.config.invoice_journal_id;
+            if (!invoice_journal_id) {
+                return null
+            } else {
+                return invoice_journal_id[0];
+            }
+        },
+        /*
+            We not use exports.Product because if you have 1 ~ 10 millions data products
+            Original function odoo will crashed browse memory
+         */
+        get_price: function (product, pricelist, quantity) {
+            if (!quantity) {
+                quantity = 1
+            }
+            if (!pricelist) {
+                return product['price'];
+            }
+            if (pricelist['items'] == undefined) {
+                return product['price'];
+            }
+            var date = moment().startOf('day');
+            var category_ids = [];
+            var category = product.categ;
+            while (category) {
+                category_ids.push(category.id);
+                category = category.parent;
+            }
+            var pricelist_items = [];
+            for (var i = 0; i < pricelist.items.length; i++) {
+                var item = pricelist.items[i];
+                if ((!item.product_tmpl_id || item.product_tmpl_id[0] === product.product_tmpl_id) &&
+                    (!item.product_id || item.product_id[0] === self.id) &&
+                    (!item.categ_id || _.contains(category_ids, item.categ_id[0])) &&
+                    (!item.date_start || moment(item.date_start).isSameOrBefore(date)) &&
+                    (!item.date_end || moment(item.date_end).isSameOrAfter(date))) {
+                    pricelist_items.push(item)
+                }
+            }
+            var price = product['list_price'];
+            _.find(pricelist_items, function (rule) {
+                if (rule.min_quantity && quantity < rule.min_quantity) {
+                    return false;
+                }
+                if (rule.base === 'pricelist') {
+                    price = this.get_price(rule.base_pricelist, quantity);
+                } else if (rule.base === 'standard_price') {
+                    price = product.standard_price;
+                }
+                if (rule.compute_price === 'fixed') {
+                    price = rule.fixed_price;
+                    return true;
+                } else if (rule.compute_price === 'percentage') {
+                    price = price - (price * (rule.percent_price / 100));
+                    return true;
+                } else {
+                    var price_limit = price;
+                    price = price - (price * (rule.price_discount / 100));
+                    if (rule.price_round) {
+                        price = round_pr(price, rule.price_round);
+                    }
+                    if (rule.price_surcharge) {
+                        price += rule.price_surcharge;
+                    }
+                    if (rule.price_min_margin) {
+                        price = Math.max(price, price_limit + rule.price_min_margin);
+                    }
+                    if (rule.price_max_margin) {
+                        price = Math.min(price, price_limit + rule.price_max_margin);
+                    }
+                    return true;
+                }
+                return false;
+            });
+            return price;
+        }
+        ,
+        /*
+            This function return product amount with default tax set on product > sale > taxes
+         */
+        get_price_with_tax: function (product, pricelist) {
+            var price;
+            if (pricelist) {
+                price = this.get_price(product, pricelist, 1);
+            } else {
+                price = product['list_price'];
+            }
             var taxes_id = product['taxes_id'];
+            if (!taxes_id) {
+                return price;
+            }
             var tax_amount = 0;
             var base_amount = this['list_price'];
             if (taxes_id.length > 0) {
                 for (var index_number in taxes_id) {
                     var tax = this.taxes_by_id[taxes_id[index_number]];
-                    if (tax && tax.price_include) {
+                    if ((tax && tax.price_include) || !tax) {
                         continue;
-                    }
-                    if (!tax) {
-                        continue
                     } else {
                         if (tax.amount_type === 'fixed') {
                             var sign_base_amount = base_amount >= 0 ? 1 : -1;
@@ -284,35 +597,58 @@ odoo.define('pos_retail.model', function (require) {
             return this.bus_location
         }
         ,
-        query_backend_fail: function (type, error) {
-            if (type && type.code === 200 && type.message && type.data && type.data.message) {
+        query_backend_fail: function (error) {
+            if (error && error.code === 200 && error.data && error.data.message) {
                 return this.gui.show_popup('confirm', {
-                    title: type.message,
-                    body: type.data.message,
+                    title: error.message,
+                    body: error.data.message,
                 })
             } else {
                 return this.gui.show_popup('confirm', {
                     title: 'Error',
-                    body: 'Odoo offline mode',
+                    body: 'Odoo offline mode or backend codes have issues. Please contact your admin system',
                 })
             }
         }
         ,
         scan_product: function (parsed_code) {
+            /*
+                    This function only return true or false
+                    Because if barcode passed mapping data of products, customers ... will return true
+                    Else all return false and popup warning message
+             */
             var self = this;
-            console.log('-> scan barcode: ' + parsed_code.base_code);
-            var product = this.db.get_product_by_barcode(parsed_code.base_code);
+            console.log('-> scan barcode: ' + parsed_code.code);
+            var product = this.db.get_product_by_barcode(parsed_code.code);
             var lot_by_barcode = this.lot_by_barcode;
-            var lots = lot_by_barcode[parsed_code.base_code];
+            var lots = lot_by_barcode[parsed_code.code];
             var selectedOrder = this.get_order();
-            var products_by_supplier_barcode = this.db.product_by_supplier_barcode[parsed_code.base_code];
-            var barcodes = this.barcodes_by_barcode[parsed_code.base_code];
+            var products_by_supplier_barcode = this.db.product_by_supplier_barcode[parsed_code.code];
+            var barcodes = this.barcodes_by_barcode[parsed_code.code];
             var lots = _.filter(lots, function (lot) {
                 var product_id = lot.product_id[0];
                 var product = self.db.product_by_id[product_id];
                 return product != undefined
-            })
-            if (lots && lots.length) { // scan lots
+            });
+            var quantity_pack = _.find(this.quantities_pack, function (pack) {
+                return pack.barcode == parsed_code.code;
+            });
+            if (quantity_pack) {
+                var product_by_product_tmpl_id = _.find(this.pos.db.get_product_by_category(0), function (product) { // need check v10
+                    return product.product_tmpl_id == quantity_pack['product_tmpl_id'][0];
+                });
+                if (product_by_product_tmpl_id) {
+                    var product = self.db.product_by_id[product_by_product_tmpl_id.id];
+                    if (product) {
+                        selectedOrder.add_product(product, {quantity: quantity_pack.quantity, merge: true});
+                        var order_line = selectedOrder.get_selected_orderline();
+                        order_line.set_unit_price(quantity_pack['public_price']);
+                        order_line.price_manually_set = true;
+                        return true
+                    }
+                }
+            }
+            if (lots && lots.length) {
                 if (lots.length > 1) {
                     var list = [];
                     for (var i = 0; i < lots.length; i++) {
@@ -333,32 +669,32 @@ odoo.define('pos_retail.model', function (require) {
                                 if (order_line) {
                                     if (lot.replace_product_public_price && lot.public_price) {
                                         order_line.set_unit_price(lot['public_price'])
+                                        order_line.price_manually_set = true;
                                     }
-		                            $('.packlot-line-input').remove(); // fix on safari
-		                            setTimeout(function () {
-		                                var pack_models = order_line.pack_lot_lines.models;
-		                                if (pack_model) {
-		                                    for (var i = 0; i < pack_models.length; i++) {
-		                                        var pack_model = pack_models[i];
-		                                        pack_model.set_lot_name(lot['name']);
-		                                        pack_model.set_lot(lot);
-		                                    }
-		                                    order_line.trigger('change', order_line);
-		                                }
-		                            }, 300);
-		                        }    
-		                        return true
+                                    $('.packlot-line-input').remove(); // fix on safari
+                                    setTimeout(function () {
+                                        var pack_models = order_line.pack_lot_lines.models;
+                                        if (pack_model) {
+                                            for (var i = 0; i < pack_models.length; i++) {
+                                                var pack_model = pack_models[i];
+                                                pack_model.set_lot_name(lot['name'], lot);
+                                            }
+                                            order_line.trigger('change', order_line);
+                                        }
+                                    }, 300);
+                                }
+                                return true
                             } else {
-                                return this.gui.show_popup('confirm', {
+                                this.gui.show_popup('dialog', {
                                     title: 'Warning',
                                     body: 'Lot name is correct but product of lot not available on POS'
                                 });
+                                return false;
                             }
                         }
                     });
-                    return true; // break out scanning action
-                }
-                else if (lots.length == 1) {
+                    return true;
+                } else if (lots.length == 1) {
                     var lot = lots[0];
                     var product = self.db.product_by_id[lot.product_id[0]];
                     if (product) {
@@ -367,39 +703,38 @@ odoo.define('pos_retail.model', function (require) {
                         var order_line = selectedOrder.get_selected_orderline();
                         if (order_line) {
                             if (lot.replace_product_public_price && lot.public_price) {
-                                order_line.set_unit_price(lot['public_price'])
+                                order_line.set_unit_price(lot['public_price']);
+                                order_line.price_manually_set = true;
                             }
-		                    $('.packlot-line-input').remove(); // fix on safari
-		                    setTimeout(function () {
-		                        var pack_models = order_line.pack_lot_lines.models;
-		                        if (pack_models) {
-		                            for (var i = 0; i < pack_models.length; i++) {
-		                                var pack_model = pack_models[i];
-		                                pack_model.set_lot_name(lot['name']);
-		                                pack_model.set_lot(lot);
-		                            }
-		                            order_line.trigger('change', order_line);
-		                        }
-		                    }, 300);
-		                }
+                            $('.packlot-line-input').remove(); // fix on safari
+                            setTimeout(function () {
+                                var pack_models = order_line.pack_lot_lines.models;
+                                if (pack_models) {
+                                    for (var i = 0; i < pack_models.length; i++) {
+                                        var pack_model = pack_models[i];
+                                        pack_model.set_lot_name(lot['name'], lot);
+                                    }
+                                    order_line.trigger('change', order_line);
+                                }
+                            }, 300);
+                        }
                         return true
                     } else {
-                        return this.gui.show_popup('confirm', {
+                        return this.gui.show_popup('dialog', {
                             title: 'Warning',
                             body: 'Lot name is correct but product of lot not available on POS'
                         });
                     }
                 }
-            }
-            else if (products_by_supplier_barcode) { // scan code by suppliers code
-                var products = []
+            } else if (products_by_supplier_barcode) { // scan code by suppliers code
+                var products = [];
                 for (var i = 0; i < products_by_supplier_barcode.length; i++) {
                     products.push({
                         label: products_by_supplier_barcode[i]['display_name'],
                         item: products_by_supplier_barcode[i]
                     })
                 }
-                var product = this.db.get_product_by_barcode(parsed_code.base_code);
+                var product = this.db.get_product_by_barcode(parsed_code.code);
                 if (product) {
                     products.push({
                         label: product['display_name'],
@@ -433,8 +768,7 @@ odoo.define('pos_retail.model', function (require) {
                     }
                 });
                 return true
-            }
-            else if (product && barcodes) { // multi barcode, if have product and barcodes
+            } else if (product && barcodes) { // multi barcode, if have product and barcodes
                 var list = [{
                     'label': product['name'] + '| price: ' + product['list_price'] + ' | qty: 1 ' + '| and Uoms: ' + product['uom_id'][1],
                     'item': product,
@@ -471,8 +805,7 @@ odoo.define('pos_retail.model', function (require) {
                 if (list.length > 0) {
                     return true;
                 }
-            }
-            else if (!product && barcodes) { // not have product but have barcodes
+            } else if (!product && barcodes) { // not have product but have barcodes
                 if (barcodes.length == 1) {
                     var barcode = barcodes[0]
                     var product = this.db.product_by_id[barcode['product_id'][0]];
@@ -525,39 +858,17 @@ odoo.define('pos_retail.model', function (require) {
         }
         ,
         _save_to_server: function (orders, options) {
-            for (var i = 0; i < orders.length; i++) {
-                var order = orders[i];
-                if ((order.data.plus_point || order.data.redeem_point) && order.data.partner_id) {
-                    var customer = this.db.get_partner_by_id(order.data.partner_id)
-                    if (order.data.plus_point != undefined) {
-                        customer['pos_loyalty_point'] += order.data.plus_point;
-                    }
-                    if (order.data.redeem_point != undefined) {
-                        customer['pos_loyalty_point'] -= order.data.redeem_point;
-                    }
-                    this.db.partner_by_id[order.data.partner_id] = customer;
-                    this.trigger('update:point-client');
-                }
-            }
             if (this.hide_pads) {
-                $('.show_hide_pads').click();
+                $('.pad').click();
             }
             return _super_PosModel._save_to_server.call(this, orders, options);
         }
         ,
-        
-        /* This was added by AARSOL
-        push_order: function(order){
-            var self = this;
-            var pushed = PosModelSuper.prototype.push_order.call(this, order);
-            
-            return pushed;
-        },
-        */
-        
         push_order: function (order, opts) {
-            var self = this;
             var pushed = _super_PosModel.push_order.apply(this, arguments);
+            if (!order) {
+                return pushed;
+            }
             var client = order && order.get_client();
             if (client) {
                 for (var i = 0; i < order.paymentlines.models.length; i++) {
@@ -567,28 +878,35 @@ odoo.define('pos_retail.model', function (require) {
                     if (journal.pos_method_type == 'wallet') {
                         client.wallet = -amount;
                     }
-                    if (journal.credit) {
-                        client.balance -= line.get_amount(); // update balance when payment viva credit journal
+                    if (journal.pos_method_type == 'credit') {
+                        client.balance -= line.get_amount();
                     }
                 }
-                this.trigger('sync:partner');
             }
             return pushed;
-        },
-
+        }
+        ,
         get_balance: function (client) {
-            var balance = round_pr(client.balance, this.currency.rounding)
+            var balance = round_pr(client.balance, this.currency.rounding);
             return (Math.round(balance * 100) / 100).toString()
         }
         ,
         get_wallet: function (client) {
-            var wallet = round_pr(client.wallet, this.currency.rounding)
+            var wallet = round_pr(client.wallet, this.currency.rounding);
             return (Math.round(wallet * 100) / 100).toString()
         }
         ,
         add_return_order: function (order, lines) {
-            var partner_id = order['partner_id']
-            var return_order_id = order['id']
+            // TODO:
+            //      - return order have redeem point
+            //      - return order have promotion
+            //      - return order have line qty smaller than 0
+            var self = this;
+            var order_return_id = order['id'];
+            var order_selected_state = order['state'];
+            var def = new $.Deferred();
+            var partner_id = order['partner_id'];
+            var return_order_id = order['id'];
             var order = new models.Order({}, {pos: this});
             order['is_return'] = true;
             order['return_order_id'] = return_order_id;
@@ -604,42 +922,110 @@ odoo.define('pos_retail.model', function (require) {
             this.set('selectedOrder', order);
             for (var i = 0; i < lines.length; i++) {
                 var line_return = lines[i];
+                if (line_return['is_return']) {
+                    return this.gui.show_popup('confirm', {
+                        title: 'Warning',
+                        body: 'This order is order return before, could made return again'
+                    })
+                }
                 var price = line_return['price_unit'];
+                if (price < 0) {
+                    price = -price;
+                }
                 var quantity = 0;
-                var product = this.db.get_product_by_id(line_return.product_id[0])
-                var line = new models.Orderline({}, {pos: this, order: order, product: product});
+                var product = this.db.get_product_by_id(line_return.product_id[0]);
+                if (!product) {
+                    console.error('Could not find product: ' + line_return.product_id[0]);
+                    continue
+                }
+                var line = new models.Orderline({}, {
+                    pos: this,
+                    order: order,
+                    product: product,
+                });
+                order.orderlines.add(line);
+                if (line_return['combo_item_ids']) {
+                    line.set_combo_items(line_return['combo_item_ids'])
+                }
+                if (line_return['variant_ids']) {
+                    line.set_variants(line_return['variant_ids'])
+                }
+                if (line_return['tag_ids']) {
+                    line.set_tags(line_return['tag_ids'])
+                }
                 line['is_return'] = true;
-                if (line_return.plus_point) { // loyalty point back
-                    line.plus_point = -line_return.plus_point;
-                } else {
-                    line_return.plus_point = 0;
-                }
-                if (line_return.redeem_point) {
-                    line.redeem_point = -line_return.redeem_point;
-                } else {
-                    line_return.redeem_point = 0;
-                }
                 line.set_unit_price(price);
+                line.price_manually_set = true;
+                if (line_return.discount)
+                    line.set_discount(line_return.discount);
+                if (line_return.discount_reason)
+                    line.discount_reason = line_return.discount_reason;
                 if (line_return['new_quantity']) {
                     quantity = -line_return['new_quantity']
                 } else {
                     quantity = -line_return['qty']
                 }
                 if (quantity > 0) {
-                    quantity = -quantity
+                    quantity = -quantity;
+                }
+                if (line_return.promotion) {
+                    quantity = -quantity;
+                }
+                if (line_return.redeem_point) {
+                    quantity = -quantity;
+                    line.credit_point = line_return.redeem_point;
                 }
                 line.set_quantity(quantity, 'keep price when return');
-                order.orderlines.add(line);
+
             }
-            return order;
+            if (order_selected_state == 'partial_payment') {
+                rpc.query({
+                    model: 'account.bank.statement.line',
+                    method: 'search_read',
+                    domain: [['pos_statement_id', '=', order_return_id]],
+                    fields: [],
+                }).then(function (statements) {
+                    var last_paid = 0;
+                    for (var i = 0; i < statements.length; i++) {
+                        var statement = statements[i];
+                        last_paid += statement['amount'];
+                    }
+                    last_paid = self.gui.chrome.format_currency(last_paid);
+                    self.gui.show_popup('dialog', {
+                        'title': _t('Warning'),
+                        'body': 'Order just selected return is partial payment, and customer only paid: ' + last_paid + ' . Please return back money to customer correctly',
+                        'timer': 2500,
+                    });
+                    def.resolve()
+                }).fail(function (error) {
+                    def.reject(error)
+                });
+            } else {
+                journal_return = _.find(this.journals, function (journal) {
+                    return journal['pos_method_type'] == 'return';
+                });
+                if (journal_return) {
+                    var cashregister = _.find(self.cashregisters, function (cashregister) {
+                        return cashregister['journal_id'][0] == journal_return['id'];
+                    });
+                    if (cashregister) {
+                        order.add_paymentline(cashregister);
+                        var amount_withtax = order.get_total_with_tax();
+                        order.selected_paymentline.set_amount(amount_withtax);
+                        order.trigger('change', order);
+                        this.trigger('auto_update:paymentlines', this);
+                    }
+                }
+                def.resolve()
+            }
+            return def;
         }
         ,
         set_start_order: function () { // lock unlock order
             var self = this;
             var res = _super_PosModel.set_start_order.apply(this, arguments);
             var order = this.get_order();
-            
-            if (order && order['lock'] && this.config.lock_order_printed_receipt && order['userlocked'] != this.pos.config.user_id[0] && this.pos.config.staff_level == 'waiter') {
+            if (order && order['lock'] && this.config.lock_order_printed_receipt) {
                 setTimeout(function () {
                     self.lock_order();
                 }, 1000)
@@ -650,7 +1036,7 @@ odoo.define('pos_retail.model', function (require) {
             return res
         }
         ,
-        lock_order: function () {            
+        lock_order: function () {
             $('.rightpane').addClass('oe_hidden');
             $('.buttons_pane').addClass('oe_hidden');
             $('.timeline').addClass('oe_hidden');
@@ -661,870 +1047,142 @@ odoo.define('pos_retail.model', function (require) {
                 $('.actionpad').addClass('oe_hidden');
                 $('.deleteorder-button').addClass('oe_hidden');
             }
-            if (this.config.staff_level == 'cashier') {
-                $('.numpad').addClass('oe_hidden');
-                $('.deleteorder-button').addClass('oe_hidden');
-            }
-
         }
         ,
         unlock_order: function () {
+            if (this.config.mobile_responsive) {
+                return;
+            }
             $('.rightpane').removeClass('oe_hidden');
             $('.buttons_pane').removeClass('oe_hidden');
             $('.timeline').removeClass('oe_hidden');
             $('.find_customer').removeClass('oe_hidden');
             $('.numpad').removeClass('oe_hidden');
             $('.actionpad').removeClass('oe_hidden');
-            
-            // Changed by AARSOL            
-            if(this.chrome.widget.count_item_widget.show){                
-            	if (this.chrome.pos.config.screen_type && this.chrome.pos.config.screen_type == 'waiter')
-            	    $('.leftpane').css({'left': '146px'});
-            	else
-            	    $('.leftpane').css({'left': '220px'});        	
-            } else {
-            	$('.leftpane').css({'left': '0px'});    
-            }
-            
             if (this.config.staff_level == 'manager') {
                 $('.deleteorder-button').removeClass('oe_hidden');
             }
         }
+        ,
+        load_server_data: function () {
+            var self = this;
+            return _super_PosModel.load_server_data.apply(this, arguments).then(function () {
+                return rpc.query({
+                    model: 'res.currency',
+                    method: 'search_read',
+                    domain: [['active', '=', true]],
+                    fields: ['name', 'symbol', 'position', 'rounding', 'rate', 'converted_currency']
+                }).then(function (currencies) {
+                    self.currency_by_id = {};
+                    self.currencies = currencies;
+                    var i = 0;
+                    while (i < currencies.length) {
+                        self.currency_by_id[currencies[i].id] = currencies[i];
+                        i++
+                    }
+                    var cashregisters = self.cashregisters;
+                    for (var i = 0; i < cashregisters.length; i++) {
+                        var cashregister = cashregisters[i];
+                        var currency = self.currency_by_id[cashregister['currency_id'][0]];
+                        if (cashregister['currency_id'] && cashregister['currency_id'][0] && currency && currency['rate']) {
+                            cashregister['rate'] = currency['rate']
+                        }
+                    }
+                });
+            })
+        }
+        ,
+        load_server_data_by_model: function (model) {
+            var self = this;
+            var loaded = new $.Deferred();
+            var progress = 0;
+            var tmp = {};
+            self.chrome.loading_message(_t('Loading') + ' ' + (model.label || model.model || ''), progress);
+            var fields = typeof model.fields === 'function' ? model.fields(self, tmp) : model.fields;
+            var domain = typeof model.domain === 'function' ? model.domain(self, tmp) : model.domain;
+            var context = typeof model.context === 'function' ? model.context(self, tmp) : model.context || {};
+            var ids = typeof model.ids === 'function' ? model.ids(self, tmp) : model.ids;
+            var order = typeof model.order === 'function' ? model.order(self, tmp) : model.order;
+
+            if (model.model) {
+                var params = {
+                    model: model.model,
+                    context: _.extend(context, session.user_context || {}),
+                };
+
+                if (model.ids) {
+                    params.method = 'read';
+                    params.args = [ids, fields];
+                } else {
+                    params.method = 'search_read';
+                    params.domain = domain;
+                    params.fields = fields;
+                    params.orderBy = order;
+                }
+
+                rpc.query(params).then(function (result) {
+                    try {    // catching exceptions in model.loaded(...)
+                        $.when(model.loaded(self, result, tmp))
+                            .then(function () {
+                                    loaded.resolve();
+                                },
+                                function (err) {
+                                    loaded.reject(err);
+                                });
+                    } catch (err) {
+                        console.error(err.message, err.stack);
+                        loaded.reject(err);
+                    }
+                }, function (err) {
+                    loaded.reject(err);
+                });
+            }
+            return loaded;
+        }
+    });
+
+// validate click change minus
+    var _super_NumpadState = models.NumpadState.prototype;
+    models.NumpadState = models.NumpadState.extend({
+        switchSign: function () {
+            self.posmodel.switchSign = this;
+            if (self.posmodel.config.validate_change_minus) {
+                return self.posmodel.gui.show_popup('ask_password', {
+                    title: 'Pos pass pin ?',
+                    body: 'Please use pos security pin for unlock',
+                    confirm: function (value) {
+                        var pin;
+                        if (self.posmodel.config.manager_validate) {
+                            var user_validate = self.posmodel.user_by_id[this.pos.config.manager_user_id[0]];
+                            pin = user_validate['pos_security_pin']
+                        } else {
+                            pin = self.posmodel.user.pos_security_pin
+                        }
+                        if (value != pin) {
+                            return self.posmodel.gui.show_popup('dialog', {
+                                title: 'Wrong',
+                                body: 'Pos security pin not correct'
+                            })
+                        } else {
+                            return _super_NumpadState.switchSign.apply(this.pos.switchSign, arguments);
+                        }
+                    }
+                });
+            } else {
+                return _super_NumpadState.switchSign.apply(this, arguments);
+            }
+        }
+    });
+
+    var _super_product = models.Product.prototype; // TODO: only odoo 11 and 12 have this model, dont merge
+    models.Product = models.Product.extend({
+        get_price: function (pricelist, quantity) {
+            if (!pricelist) {
+                return this.lst_price;
+            } else {
+                return _super_product.get_price.apply(this, arguments);
+            }
+        }
     })
-    ;
-
-    models.load_models([
-        {
-            model: 'res.users',
-            fields: ['display_name', 'name', 'pos_security_pin', 'barcode', 'pos_config_id', 'partner_id','can_give_discount','can_change_price','discount_limit'],
-            context: {sudo: true},
-            loaded: function (self, users) {
-                self.user_by_id = {};
-                self.user_by_pos_security_pin = {};
-                self.user_by_barcode = {};
-                for (var i = 0; i < users.length; i++) {
-                    if (users[i]['pos_security_pin']) {
-                        self.user_by_pos_security_pin[users[i]['pos_security_pin']] = users[i];
-                    }
-                    if (users[i]['barcode']) {
-                        self.user_by_barcode[users[i]['barcode']] = users[i];
-                    }
-                    self.user_by_id[users[i]['id']] = users[i];
-                }
-            }
-        },
-        {
-            model: 'pos.bus',
-            fields: [],
-            domain: [['user_id', '!=', false]],
-            loaded: function (self, bus_locations) {
-                self.bus_locations = bus_locations;
-                self.bus_location_by_id = {};
-                for (var i = 0; i < bus_locations.length; i++) {
-                    var bus = bus_locations[i];
-                    self.bus_location_by_id[bus.id] = bus;
-                }
-            }
-        },
-        {
-            model: 'pos.promotion',
-            condition: function (self) {
-                return self.config.promotion && self.config.promotion_ids && self.config.promotion_ids.length != 0;
-            },
-            fields: ['name', 'start_date', 'end_date', 'type', 'product_id', 'discount_lowest_price'],
-            domain: function (self) {
-                return [
-                    ['id', 'in', self.config.promotion_ids],
-                    ['start_date', '<=', time.date_to_str(new Date()) + " " + time.time_to_str(new Date())],
-                    ['end_date', '>=', time.date_to_str(new Date()) + " " + time.time_to_str(new Date())],
-                ]
-            },
-            loaded: function (self, promotions) {
-                self.promotions = promotions;
-                self.promotion_by_id = {};
-                self.promotion_ids = [];
-                var i = 0;
-                while (i < promotions.length) {
-                    self.promotion_by_id[promotions[i].id] = promotions[i];
-                    self.promotion_ids.push(promotions[i].id);
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.discount.order',
-            fields: ['minimum_amount', 'discount', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, discounts) {
-                self.promotion_discount_order_by_id = {};
-                self.promotion_discount_order_by_promotion_id = {};
-                var i = 0;
-                while (i < discounts.length) {
-                    self.promotion_discount_order_by_id[discounts[i].id] = discounts[i];
-                    if (!self.promotion_discount_order_by_promotion_id[discounts[i].promotion_id[0]]) {
-                        self.promotion_discount_order_by_promotion_id[discounts[i].promotion_id[0]] = [discounts[i]]
-                    } else {
-                        self.promotion_discount_order_by_promotion_id[discounts[i].promotion_id[0]].push(discounts[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.discount.category',
-            fields: ['category_id', 'discount', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, discounts_category) {
-                self.promotion_by_category_id = {};
-                var i = 0;
-                while (i < discounts_category.length) {
-                    self.promotion_by_category_id[discounts_category[i].category_id[0]] = discounts_category[i];
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.discount.quantity',
-            fields: ['product_id', 'quantity', 'discount', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, discounts_quantity) {
-                self.promotion_quantity_by_product_id = {};
-                var i = 0;
-                while (i < discounts_quantity.length) {
-                    if (!self.promotion_quantity_by_product_id[discounts_quantity[i].product_id[0]]) {
-                        self.promotion_quantity_by_product_id[discounts_quantity[i].product_id[0]] = [discounts_quantity[i]]
-                    } else {
-                        self.promotion_quantity_by_product_id[discounts_quantity[i].product_id[0]].push(discounts_quantity[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.gift.condition',
-            fields: ['product_id', 'minimum_quantity', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, gift_conditions) {
-                self.promotion_gift_condition_by_promotion_id = {};
-                var i = 0;
-                while (i < gift_conditions.length) {
-                    if (!self.promotion_gift_condition_by_promotion_id[gift_conditions[i].promotion_id[0]]) {
-                        self.promotion_gift_condition_by_promotion_id[gift_conditions[i].promotion_id[0]] = [gift_conditions[i]]
-                    } else {
-                        self.promotion_gift_condition_by_promotion_id[gift_conditions[i].promotion_id[0]].push(gift_conditions[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.gift.free',
-            fields: ['product_id', 'quantity_free', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, gifts_free) {
-                self.promotion_gift_free_by_promotion_id = {};
-                var i = 0;
-                while (i < gifts_free.length) {
-                    if (!self.promotion_gift_free_by_promotion_id[gifts_free[i].promotion_id[0]]) {
-                        self.promotion_gift_free_by_promotion_id[gifts_free[i].promotion_id[0]] = [gifts_free[i]]
-                    } else {
-                        self.promotion_gift_free_by_promotion_id[gifts_free[i].promotion_id[0]].push(gifts_free[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.discount.condition',
-            fields: ['product_id', 'minimum_quantity', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, discount_conditions) {
-                self.promotion_discount_condition_by_promotion_id = {};
-                var i = 0;
-                while (i < discount_conditions.length) {
-                    if (!self.promotion_discount_condition_by_promotion_id[discount_conditions[i].promotion_id[0]]) {
-                        self.promotion_discount_condition_by_promotion_id[discount_conditions[i].promotion_id[0]] = [discount_conditions[i]]
-                    } else {
-                        self.promotion_discount_condition_by_promotion_id[discount_conditions[i].promotion_id[0]].push(discount_conditions[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.discount.apply',
-            fields: ['product_id', 'discount', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, discounts_apply) {
-                self.promotion_discount_apply_by_promotion_id = {};
-                var i = 0;
-                while (i < discounts_apply.length) {
-                    if (!self.promotion_discount_apply_by_promotion_id[discounts_apply[i].promotion_id[0]]) {
-                        self.promotion_discount_apply_by_promotion_id[discounts_apply[i].promotion_id[0]] = [discounts_apply[i]]
-                    } else {
-                        self.promotion_discount_apply_by_promotion_id[discounts_apply[i].promotion_id[0]].push(discounts_apply[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.price',
-            fields: ['product_id', 'minimum_quantity', 'list_price', 'promotion_id'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, prices) {
-                self.promotion_price_by_promotion_id = {};
-                var i = 0;
-                while (i < prices.length) {
-                    if (!self.promotion_price_by_promotion_id[prices[i].promotion_id[0]]) {
-                        self.promotion_price_by_promotion_id[prices[i].promotion_id[0]] = [prices[i]]
-                    } else {
-                        self.promotion_price_by_promotion_id[prices[i].promotion_id[0]].push(prices[i])
-                    }
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.promotion.special.category',
-            fields: ['category_id', 'type', 'count', 'discount', 'promotion_id', 'product_id', 'qty_free'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, promotion_lines) {
-                self.promotion_special_category_by_promotion_id = {};
-                var i = 0;
-                while (i < promotion_lines.length) {
-                    if (!self.promotion_special_category_by_promotion_id[promotion_lines[i].promotion_id[0]]) {
-                        self.promotion_special_category_by_promotion_id[promotion_lines[i].promotion_id[0]] = [promotion_lines[i]]
-                    } else {
-                        self.promotion_special_category_by_promotion_id[promotion_lines[i].promotion_id[0]].push(promotion_lines[i])
-                    }
-                    i++;
-                }
-            }
-        },  {
-            model: 'pos.promotion.multi.buy',
-            fields: ['promotion_id', 'product_id', 'quantity_of_by', 'quantity_promotion', 'price_promotion'],
-            condition: function (self) {
-                return self.promotion_ids && self.promotion_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['promotion_id', 'in', self.promotion_ids]]
-            },
-            loaded: function (self, multi_buy) {
-                self.multi_buy = multi_buy;
-                self.multi_buy_by_product_id = {};
-                for (var i = 0; i < multi_buy.length; i++) {
-                    var rule = multi_buy[i];
-                    if (!self.multi_buy_by_product_id[rule['product_id'][0]]) {
-                        self.multi_buy_by_product_id[rule['product_id'][0]] = [multi_buy[i]]
-                    } else {
-                        self.multi_buy_by_product_id[rule['product_id'][0]].push(multi_buy[i])
-                    }
-                }
-            }
-        },  {
-            model: 'pos.tag',
-            fields: ['name'],
-            domain: [],
-            loaded: function (self, tags) {
-                self.tags = tags;
-                self.tag_by_id = {};
-                var i = 0;
-                while (i < tags.length) {
-                    self.tag_by_id[tags[i].id] = tags[i];
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.note',
-            fields: ['name'],
-            loaded: function (self, notes) {
-                self.notes = notes;
-                self.note_by_id = {};
-                var i = 0;
-                while (i < notes.length) {
-                    self.note_by_id[notes[i].id] = notes[i];
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.product.prop',
-            fields: [],
-            loaded: function (self, props) {
-                self.prop_notes = props;
-                self.prop_by_id = {};
-                var i = 0;
-                while (i < props.length) {
-                    self.prop_by_id[props[i].id] = props[i];
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.product.prop.line',
-            fields: [],
-            loaded: function (self, lines) {
-                self.prop_notes_options = lines;
-                self.prop_option_by_id = {};
-                var i = 0;
-                while (i < lines.length) {
-                    self.prop_option_by_id[lines[i].id] = lines[i];
-                    i++;
-                }
-            }
-        }, {
-            model: 'pos.combo.item',
-            fields: ['product_id', 'product_combo_id', 'default', 'quantity', 'uom_id', 'tracking'],
-            domain: [],
-            loaded: function (self, combo_items) {
-                self.combo_items = combo_items;
-                self.combo_item_by_id = {}
-                for (var i = 0; i < combo_items.length; i++) {
-                    self.combo_item_by_id[combo_items[i].id] = combo_items[i];
-                }
-            }
-        },
-        {
-            model: 'stock.production.lot',
-            fields: ['name', 'ref', 'product_id', 'product_uom_id', 'create_date', 'product_qty', 'barcode', 'replace_product_public_price', 'public_price'],
-            domain: [],
-            loaded: function (self, lots) {
-                self.lots = lots;
-                self.lot_by_name = {};
-                self.lot_by_barcode = {};
-                self.lot_by_product_id = {};
-                self.lot_by_id = {};
-                for (var i = 0; i < lots.length; i++) {
-                    var lot = lots[i];
-                    self.lot_by_name[lot['name']] = lot;
-                    self.lot_by_id[lot['id']] = lot;
-                    if (lot['barcode']) {
-                        if (self.lot_by_barcode[lot['barcode']]) {
-                            self.lot_by_barcode[lot['barcode']].push(lot)
-                        } else {
-                            self.lot_by_barcode[lot['barcode']] = [lot]
-                        }
-                    }
-                    if (!self.lot_by_product_id[lot.product_id[0]]) {
-                        self.lot_by_product_id[lot.product_id[0]] = [lot];
-                    } else {
-                        self.lot_by_product_id[lot.product_id[0]].push(lot);
-                    }
-                }
-            }
-        }, {
-            model: 'account.journal',
-            fields: [],
-            domain: function (self, tmp) {
-                return [['id', 'in', tmp.journals]];
-            },
-            loaded: function (self, journals) {
-                self.journal_by_id = {};
-                for (var i = 0; i < journals.length; i++) {
-                    self.journal_by_id[journals[i]['id']] = journals[i];
-                }
-            }
-        }, {
-            model: 'pos.config.image',
-            condition: function (self) {
-                return self.config.is_customer_screen;
-            },
-            fields: [],
-            domain: function (self) {
-                return [['config_id', '=', self.config.id]]
-            },
-            loaded: function (self, images) {
-                self.images = images;
-            }
-        }, {
-            model: 'pos.global.discount',
-            fields: ['name', 'amount', 'product_id', 'reason'],
-            domain: [],
-            loaded: function (self, discounts) {
-                self.discounts = discounts;
-                self.discount_by_id = {};
-                var i = 0;
-                while (i < discounts.length) {
-                    self.discount_by_id[discounts[i].id] = discounts[i];
-                    i++;
-                }
-            }
-        }, {
-            model: 'stock.picking.type',
-            domain: [['code', '=', 'internal']],
-            condition: function (self) {
-                return self.config.internal_transfer;
-            },
-            loaded: function (self, stock_picking_types) {
-                for (var i = 0; i < stock_picking_types.length; i++) {
-                    if (stock_picking_types[i].warehouse_id) {
-                        stock_picking_types[i]['name'] = stock_picking_types[i].warehouse_id[1] + ' / ' + stock_picking_types[i]['name']
-                    }
-                }
-                self.stock_picking_types = stock_picking_types;
-                self.stock_picking_type_by_id = {};
-                for (var i = 0; i < stock_picking_types.length; i++) {
-                    self.stock_picking_type_by_id[stock_picking_types[i]['id']] = stock_picking_types[i];
-                }
-                if (stock_picking_types.length == 0) {
-                    self.config.internal_transfer = false
-                }
-            }
-        },
-        {
-            model: 'stock.location',
-            fields: [],
-            domain: [['usage', '=', 'internal']],
-            loaded: function (self, stock_locations) {
-                for (var i = 0; i < stock_locations.length; i++) {
-                    if (stock_locations[i].location_id) {
-                        stock_locations[i]['name'] = stock_locations[i].location_id[1] + ' / ' + stock_locations[i]['name']
-                    }
-                }
-                self.stock_locations = stock_locations;
-                self.stock_location_by_id = {};
-                for (var i = 0; i < stock_locations.length; i++) {
-                    self.stock_location_by_id[stock_locations[i]['id']] = stock_locations[i];
-                }
-                if (stock_locations.length == 0) {
-                    console.error('Location have usage is internal is null');
-                }
-            },
-        }, {
-            model: 'pos.loyalty',
-            fields: [],
-            domain: function (self) {
-                return [
-                    ['id', 'in', self.config.loyalty_ids],
-                    ['start_date', '<=', time.date_to_str(new Date()) + " " + time.time_to_str(new Date())],
-                    ['end_date', '>=', time.date_to_str(new Date()) + " " + time.time_to_str(new Date())],
-                    ['active', '=', true],
-                    ['state', '=', 'running']
-                ]
-            },
-            loaded: function (self, loyalties) {
-                self.loyalties = loyalties;
-                self.loyalty_by_id = {};
-                self.loyalty_ids = [];
-                for (var i = 0; i < loyalties.length; i++) {
-                    self.loyalty_by_id[loyalties[i].id] = loyalties[i];
-                    self.loyalty_ids.push(loyalties[i].id)
-                }
-            }
-        }
-        , {
-            model: 'pos.loyalty.rule',
-            fields: [],
-            condition: function (self) {
-                return self.loyalty_ids && self.loyalty_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['loyalty_id', 'in', self.loyalty_ids]];
-            },
-            loaded: function (self, rules) {
-                self.rules = rules;
-                self.rule_ids = [];
-                self.rule_by_id = {};
-                self.rules_by_loyalty_id = {};
-                for (var i = 0; i < rules.length; i++) {
-                    self.rule_by_id[rules[i].id] = rules[i];
-                    self.rule_ids.push(rules[i].id)
-                    if (!self.rules_by_loyalty_id[rules[i].loyalty_id[0]]) {
-                        self.rules_by_loyalty_id[rules[i].loyalty_id[0]] = [rules[i]];
-                    } else {
-                        self.rules_by_loyalty_id[rules[i].loyalty_id[0]].push(rules[i]);
-                    }
-                }
-            }
-        }, {
-            model: 'pos.loyalty.rule.order.amount',
-            fields: [],
-            condition: function (self) {
-                return self.rule_ids && self.rule_ids.length > 0;
-            },
-            domain: function (self) {
-                return [['rule_id', 'in', self.rule_ids]]
-            },
-            loaded: function (self, rules_order_amount) {
-                self.rules_order_amount = rules_order_amount;
-                self.order_amount_by_rule_id = {};
-                for (var i = 0; i < rules_order_amount.length; i++) {
-                    if (!self.order_amount_by_rule_id[rules_order_amount[i].rule_id[0]]) {
-                        self.order_amount_by_rule_id[rules_order_amount[i].rule_id[0]] = [rules_order_amount[i]];
-                    } else {
-                        self.order_amount_by_rule_id[rules_order_amount[i].rule_id[0]].push(rules_order_amount[i]);
-                    }
-                }
-            }
-        }, {
-            model: 'pos.loyalty.reward',
-            fields: [],
-            condition: function (self) {
-                return self.loyalties && self.loyalties.length > 0;
-            },
-            domain: function (self) {
-                return [['loyalty_id', 'in', self.loyalty_ids]]
-            },
-            loaded: function (self, rewards) {
-                self.rewards = rewards;
-                self.reward_by_id = {};
-                self.rewards_by_loyalty_id = {};
-                for (var i = 0; i < rewards.length; i++) {
-                    self.reward_by_id[rewards[i].id] = rewards[i];
-                    if (!self.rewards_by_loyalty_id[rewards[i].loyalty_id[0]]) {
-                        self.rewards_by_loyalty_id[rewards[i].loyalty_id[0]] = [rewards[i]];
-                    } else {
-                        self.rewards_by_loyalty_id[rewards[i].loyalty_id[0]].push([rewards[i]]);
-                    }
-                }
-            }
-        }, {
-            model: 'product.uom.price',
-            fields: [],
-            domain: [],
-            loaded: function (self, uoms_prices) {
-                self.uom_price_by_uom_id = {}
-                self.uoms_prices_by_product_tmpl_id = {}
-                self.uoms_prices = uoms_prices;
-                for (var i = 0; i < uoms_prices.length; i++) {
-                    var item = uoms_prices[i];
-                    if (item.product_tmpl_id) {
-                        self.uom_price_by_uom_id[item.uom_id[0]] = item;
-                        if (!self.uoms_prices_by_product_tmpl_id[item.product_tmpl_id[0]]) {
-                            self.uoms_prices_by_product_tmpl_id[item.product_tmpl_id[0]] = [item]
-                        } else {
-                            self.uoms_prices_by_product_tmpl_id[item.product_tmpl_id[0]].push(item)
-                        }
-                    }
-                }
-            }
-        }, {
-            model: 'product.barcode',
-            fields: ['product_tmpl_id', 'quantity', 'list_price', 'uom_id', 'barcode', 'product_id'],
-            domain: [],
-            loaded: function (self, barcodes) {
-                self.barcodes = barcodes;
-                self.barcodes_by_barcode = {};
-                for (var i = 0; i < barcodes.length; i++) {
-                    if (!barcodes[i]['product_id']) {
-                        continue
-                    }
-                    if (!self.barcodes_by_barcode[barcodes[i]['barcode']]) {
-                        self.barcodes_by_barcode[barcodes[i]['barcode']] = [barcodes[i]];
-                    } else {
-                        self.barcodes_by_barcode[barcodes[i]['barcode']].push(barcodes[i]);
-                    }
-                }
-            }
-        }, {
-            model: 'product.variant',
-            fields: ['product_tmpl_id', 'value_id', 'price_extra', 'product_id', 'quantity', 'uom_id'],
-            domain: [],
-            loaded: function (self, variants) {
-                self.variants = variants;
-                self.variant_by_product_tmpl_id = {};
-                self.variant_by_id = {};
-                for (var i = 0; i < variants.length; i++) {
-                    var variant = variants[i];
-                    self.variant_by_id[variant.id] = variant;
-                    if (!self.variant_by_product_tmpl_id[variant['product_tmpl_id'][0]]) {
-                        self.variant_by_product_tmpl_id[variant['product_tmpl_id'][0]] = [variant]
-                    } else {
-                        self.variant_by_product_tmpl_id[variant['product_tmpl_id'][0]].push(variant)
-                    }
-                }
-            }
-        }, {
-            model: 'pos.quickly.payment',
-            fields: ['name', 'amount'],
-            domain: [],
-            context: {'pos': true},
-            loaded: function (self, quickly_datas) {
-                self.quickly_datas = quickly_datas;
-                self.quickly_payment_by_id = {};
-                for (var i = 0; i < quickly_datas.length; i++) {
-                    self.quickly_payment_by_id[quickly_datas[i].id] = quickly_datas[i];
-                }
-            }
-        }, {
-            model: 'pos.voucher',
-            fields: ['code', 'value', 'apply_type', 'method', 'use_date'],
-            domain: [['state', '=', 'active']],
-            context: {'pos': true},
-            loaded: function (self, vouchers) {
-                self.vouchers = vouchers;
-                self.voucher_by_id = {};
-                for (var x = 0; x < vouchers.length; x++) {
-                    self.voucher_by_id[vouchers[x].id] = vouchers[x];
-                }
-            }
-        }, {
-            model: 'pos.order',
-            condition: function (self) {
-                return self.config.pos_orders_management;
-            },
-            fields: [],
-            domain: [['state', '!=', 'cancel'], ['lock_return', '=', false]],
-            loaded: function (self, orders) {
-                self.order_ids = [];
-                for (var i = 0; i < orders.length; i++) {
-                    self.order_ids.push(orders[i].id)
-                }
-                self.db.save_pos_orders(orders);
-            }
-        }, {
-            model: 'pos.order.line',
-            fields: [],
-            domain: [],
-            condition: function (self) {
-                return self.config.pos_orders_management;
-            },
-            loaded: function (self, order_lines) {
-                self.db.save_pos_order_line(order_lines);
-            }
-        }, {
-            model: 'account.invoice',
-            condition: function (self) {
-                return self.config.management_invoice;
-            },
-            fields: ['partner_id', 'origin', 'number', 'payment_term_id', 'date_invoice', 'state', 'residual', 'amount_tax', 'amount_total', 'type'],
-            domain: [],
-            context: {'pos': true},
-            loaded: function (self, invoices) {
-                self.db.save_invoices(invoices);
-            }
-        },
-        {
-            model: 'account.invoice.line',
-            condition: function (self) {
-                return self.config.management_invoice;
-            },
-            fields: [
-                'invoice_id',
-                'uom_id',
-                'product_id',
-                'price_unit',
-                'price_subtotal',
-                'quantity',
-                'discount',
-            ],
-            domain: [],
-            context: {'pos': true},
-            loaded: function (self, invoice_lines) {
-                self.db.save_invoice_lines(invoice_lines);
-            }
-        },
-        {
-            model: 'sale.order',
-            fields: [
-                'name',
-                'origin',
-                'client_order_ref',
-                'state',
-                'date_order',
-                'validity_date',
-                'confirmation_date',
-                'user_id',
-                'partner_id',
-                'partner_invoice_id',
-                'partner_shipping_id',
-                'invoice_status',
-                'payment_term_id',
-                'note',
-                'amount_tax',
-                'amount_total',
-                'picking_ids',
-                'delivery_address',
-                'delivery_date',
-                'delivery_phone',
-                'book_order',
-                'payment_partial_amount',
-                'payment_partial_journal_id',
-            ],
-            domain: [
-                ['book_order', '=', true],
-                ['state', '!=', 'cancel'],
-                ['state', '!=', 'done']
-            ],
-            condition: function (self) {
-                return self.config.booking_orders;
-            },
-            context: {'pos': true},
-            loaded: function (self, orders) {
-                self.db.save_sale_orders(orders);
-            }
-        }, {
-            model: 'sale.order.line',
-            fields: [
-                'name',
-                'product_id',
-                'order_id',
-                'price_unit',
-                'price_subtotal',
-                'price_tax',
-                'price_total',
-                'product_uom_qty',
-                'qty_delivered',
-                'qty_invoiced',
-                'state'],
-            domain: [['state', '!=', 'cancel'], ['state', '!=', 'done']],
-            condition: function (self) {
-                return self.config.booking_orders;
-            },
-            context: {'pos': true},
-            loaded: function (self, order_lines) {
-                self.order_lines = order_lines;
-                self.db.save_sale_order_lines(order_lines);
-            }
-        },
-        {
-            model: 'account.payment.method',
-            fields: ['name', 'code', 'payment_type'],
-            domain: [],
-            context: {'pos': true},
-            loaded: function (self, payment_methods) {
-                self.payment_methods = payment_methods;
-            }
-        }, {
-            model: 'account.payment.term',
-            fields: ['name'],
-            domain: [],
-            context: {'pos': true},
-            loaded: function (self, payments_term) {
-                self.payments_term = payments_term;
-            }
-        }, {
-            model: 'product.pricelist.item',
-            fields: [],
-            domain: [],
-            loaded: function (self, pricelist_items) {
-                if (self.server_version == 10) {
-                    _.each(pricelist_items, function (item) {
-                        var pricelist = self.pricelist_by_id[item.pricelist_id[0]];
-                        if (pricelist) {
-                            pricelist.items.push(item);
-                        }
-                        item.base_pricelist = self.pricelist_by_id[item.base_pricelist_id[0]];
-                    });
-                }
-
-            }
-        }, {
-            model: 'product.cross',
-            fields: ['product_id', 'list_price', 'quantity', 'discount_type', 'discount', 'product_tmpl_id'],
-            domain: [],
-            loaded: function (self, cross_items) {
-                self.cross_items = cross_items;
-                self.cross_item_by_id = {};
-                for (var i = 0; i < cross_items.length; i++) {
-                    self.cross_item_by_id[cross_items[i]['id']] = cross_items[i];
-                }
-            }
-        }, {
-            model: 'product.suggestion',
-            fields: ['product_id', 'list_price', 'quantity', 'product_tmpl_id'],
-            domain: [],
-            loaded: function (self, suggestion_items) {
-                self.suggestion_items = suggestion_items;
-                self.suggestion_by_id = {};
-                for (var i = 0; i < suggestion_items.length; i++) {
-                    self.suggestion_by_id[suggestion_items[i]['id']] = suggestion_items[i];
-                }
-            }
-        }, {
-            model: 'account.journal',
-            fields: [],
-            domain: function (self) {
-                return [['id', 'in', self.config.invoice_journal_ids]]
-            },
-            loaded: function (self, journals) {
-                self.journals = journals;
-                self.journal_by_id = {};
-                for (var i = 0; i < journals.length; i++) {
-                    self.journal_by_id[journals[i]['id']] = journals[i];
-                }
-            },
-        }
-    ]);
-
-    try {
-        var _super_Product = models.Product.prototype;
-        models.Product = models.Product.extend({
-            get_price: function (pricelist, quantity) {
-                var price = _super_Product.get_price.apply(this, arguments);
-                return price;
-            },
-            get_price_with_tax: function (pricelist, quantity) {
-                var price = this.get_price(pricelist, quantity);
-                var taxes_id = this['taxes_id'];
-                var tax_amount = 0;
-                var base_amount = this['list_price'];
-                if (taxes_id.length > 0) {
-                    for (var index_number in taxes_id) {
-                        var tax = self.posmodel.taxes_by_id[taxes_id[index_number]];
-                        if (tax && tax.price_include) {
-                            continue;
-                        }
-                        if (!tax) {
-                            continue
-                        } else {
-                            if (tax.amount_type === 'fixed') {
-                                var sign_base_amount = base_amount >= 0 ? 1 : -1;
-                                tax_amount += Math.abs(tax.amount) * sign_base_amount;
-                            }
-                            if ((tax.amount_type === 'percent' && !tax.price_include) || (tax.amount_type === 'division' && tax.price_include)) {
-                                tax_amount += base_amount * tax.amount / 100;
-                            }
-                            if (tax.amount_type === 'percent' && tax.price_include) {
-                                tax_amount += base_amount - (base_amount / (1 + tax.amount / 100));
-                            }
-                            if (tax.amount_type === 'division' && !tax.price_include) {
-                                tax_amount += base_amount / (1 - tax.amount / 100) - base_amount;
-                            }
-                        }
-                    }
-                }
-                return price + tax_amount;
-            }
-        })
-    } catch (e) {
-        console.log('->> version now is 10');
-    }
-
-
-});
+})
+;

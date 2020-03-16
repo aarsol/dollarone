@@ -4,6 +4,7 @@ from odoo import api, fields, models
 class pos_discount(models.Model):
 
     _name = "pos.global.discount"
+    _description = "Management Global Discount"
 
     name = fields.Char('Name', required=1)
     amount = fields.Float('Percent amount %', required=1)

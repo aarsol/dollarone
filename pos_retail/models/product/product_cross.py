@@ -4,9 +4,10 @@ from odoo import api, fields, models, _
 class product_cross(models.Model):
 
     _name = "product.cross"
+    _description = "Management cross selling products"
 
-    product_tmpl_id = fields.Many2one('product.template', 'Product', required=1)
-    product_id = fields.Many2one('product.product', 'Product', required=1, domain=[('available_in_pos', '=', True)])
+    product_tmpl_id = fields.Many2one('product.template', 'Product template', required=1)
+    product_id = fields.Many2one('product.product', 'Product Variant', required=1, domain=[('available_in_pos', '=', True)])
     list_price = fields.Float('List price', required=1)
     quantity = fields.Float('Quantity', default=1)
     discount_type = fields.Selection([
