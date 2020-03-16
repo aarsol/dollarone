@@ -10,5 +10,6 @@ class barcode_rule(models.Model):
         ('return_products', 'Return Products'),
         ('voucher', 'Voucher'),
         ('login_security', 'Login Security'),
+        ('fast_order_number', 'Fast order number'),
     ])
 

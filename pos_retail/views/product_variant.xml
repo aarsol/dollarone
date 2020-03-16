@@ -63,7 +63,8 @@
 
         <menuitem id="menu_product_variant"
                   action="product_variant_action"
-                  parent="menu_retail"
+                  parent="menu_master_data"
+                  sequence="20"
         />
 
     </data>

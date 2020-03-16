@@ -40,7 +40,8 @@
 
         <menuitem id="menu_action_pos_quickly_payment"
                   action="action_pos_quickly_payment"
-                  parent="menu_retail"
+                  parent="menu_master_data"
+                  sequence="14"
         />
 
     </data>

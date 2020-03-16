@@ -1,95 +1,107 @@
 # -*- coding: utf-8 -*-
 from odoo import api, models, fields, registry
-import logging
 import json
 import ast
-import base64
-import timeit
+from odoo.tools import DEFAULT_SERVER_DATETIME_FORMAT
+import odoo
+from datetime import datetime, timedelta
+import threading
+import logging
 
 _logger = logging.getLogger(__name__)
 
 
-class pos_database(models.Model):
-    _name = "pos.database"
-
-    date = fields.Datetime('Date', required=1)
-    database = fields.Binary(required=1)
-
-    @api.model
-    def load_master_data(self, condition={}):
-        start = timeit.default_timer()
-        _logger.info('BEGIN load_master_data')
-        _logger.info(condition)
-        cache_model = self.env['pos.cache.database'].sudo()
-        database = {
-        }
-        domain = []
-        for model, load in condition.items():
-            if load == True:
-                database[model] = []
-                domain.append(model)
-
-        _logger.info(database)
-        _logger.info(domain)
-        caches = cache_model.search_read(
-            [('res_model', 'in', tuple(domain))], ['res_id', 'res_model', 'data'])
-        if caches:
-            for cache in caches:
-                database[cache['res_model']].append(json.loads(cache['data']))
-            stop = timeit.default_timer()
-            _logger.info('END load_master_data')
-            _logger.info(stop - start)
-            return database
-        else:
-            return False
-
-    @api.model
-    def auto_update_database(self):
-        start = timeit.default_timer()
-        _logger.info('---------- BEGIN auto_update_database ----------')
-        self.search([]).unlink()
-        cache_model = self.env['pos.cache.database'].sudo()
-        database = {
-            'product.pricelist': [],
-            'product.pricelist.item': [],
-            'product.product': [],
-            'res.partner': [],
-            'account.invoice': [],
-            'account.invoice.line': [],
-            'pos.order': [],
-            'pos.order.line': [],
-            'sale.order': [],
-            'sale.order.line': [],
-        }
-        caches = cache_model.search_read(
-            [], ['res_id', 'res_model', 'data'])
-        if caches:
-            for cache in caches:
-                database[cache['res_model']].append(json.loads(cache['data']))
-            _logger.info('---------- CACHING ------------')
-            datas = {
-                'date': fields.Datetime.now(),
-                'database': base64.encodestring(json.dumps(database).encode('utf-8')),
-            }
-            self.create(datas)
-        _logger.info('END auto_update_database')
-        stop = timeit.default_timer()
-        _logger.info(stop - start)
-        return True
-
-
 class pos_cache_database(models.Model):
     _name = "pos.cache.database"
+    _description = "Management POS database"
+    _rec_name = "res_id"
+    _order = 'res_model'
 
     res_id = fields.Char('Id')
     res_model = fields.Char('Model')
-    data = fields.Text('Data')
+    deleted = fields.Boolean('Deleted', default=0)
 
-    @api.multi
+    def send_notification_pos(self, model_name, id):
+        sessions = self.env['pos.session'].sudo().search([
+            ('state', '=', 'opened')
+        ])
+        for session in sessions:
+            self.env['bus.bus'].sendmany(
+                [[(self.env.cr.dbname, 'pos.sync.backend', session.user_id.id), {
+                    'model': model_name,
+                    'id': id,
+                    'message': 'Sync direct backend'
+                }]])
+        return True
+
+    # TODO: When pos session start each table, pos need call this function for get any modifiers from backend
+    def get_modifiers_backend(self, write_date, res_model, config_id=None):
+        to_date = datetime.strptime(write_date, DEFAULT_SERVER_DATETIME_FORMAT) + timedelta(
+            seconds=1)
+        to_date = to_date.strftime(DEFAULT_SERVER_DATETIME_FORMAT)
+        records = self.sudo().search([('write_date', '>', to_date), ('res_model', '=', res_model)])
+        results = []
+        for record in records:
+            last_date = record.write_date
+            if not record.res_id:
+                continue
+            value = {
+                'model': record.res_model,
+                'id': int(record.res_id),
+            }
+            if record.deleted:
+                value['deleted'] = True
+            else:
+                val = self.get_data(record.res_model, int(record.res_id), config_id)
+                # TODO: method get_data will changeed write date from write date of record
+                #       We change write date back from write date of cache
+                if not val:
+                    value['deleted'] = True
+                else:
+                    value.update(val)
+                value.update({'write_date': last_date})
+            results.append(value)
+        return results
+
+    def get_data_by_id(self, model, id):
+        results = []
+        value = {
+            'model': model,
+            'id': id,
+        }
+        val = self.get_data(model, id)
+        if not val:
+            value['deleted'] = True
+        else:
+            value.update(val)
+        results.append(value)
+        return results
+
+    def get_modifiers_backend_all_models(self, model_values, config_id=None):
+        results = {}
+        for model, write_date in model_values.items():
+            values = self.get_modifiers_backend(write_date, model, config_id)
+            results[model] = values
+        return results
+
+    @api.model
+    def get_onhand_by_product_id(self, product_id):
+        values = {}
+        product_object = self.env['product.product'].sudo()
+        location_object = self.env['stock.location'].sudo()
+        locations = location_object.search([('usage', '=', 'internal')])
+        for location in locations:
+            datas = product_object.with_context({'location': location.id}).search_read(
+                [('id', '=', product_id)],
+                ['qty_available'])
+            for data in datas:
+                values[location.id] = data
+        return values
+
     def get_fields_by_model(self, model_name):
         params = self.env['ir.config_parameter'].sudo().get_param(model_name)
         if not params:
-            list_fields = self.env[model_name].fields_get()
+            list_fields = self.env[model_name].sudo().fields_get()
             fields_load = []
             for k, v in list_fields.items():
                 if v['type'] not in ['one2many', 'binary']:
@@ -99,7 +111,6 @@ class pos_cache_database(models.Model):
             params = ast.literal_eval(params)
             return params.get('fields', [])
 
-    @api.multi
     def get_domain_by_model(self, model_name):
         params = self.env['ir.config_parameter'].sudo().get_param(model_name)
         if not params:
@@ -108,203 +119,182 @@ class pos_cache_database(models.Model):
             params = ast.literal_eval(params)
             return params.get('domain', [])
 
-    @api.model
-    def insert_data(self, datas, model, first_install=False):
-        if first_install:
-            for data in datas:
-                self.create({
-                    'res_id': str(data['id']),
-                    'res_model': model,
-                    'data': json.dumps(data)
-                })
+    def install_data(self, model_name=None, min_id=0, max_id=1999):
+        self.env.cr.execute(
+            "select id, call_results from pos_call_log where min_id=%s and max_id=%s and call_model='%s'" % (
+                min_id, max_id, model_name))
+        old_logs = self.env.cr.fetchall()
+        datas = []
+        if len(old_logs) == 0:
+            datas = self.installing_datas(model_name, min_id, max_id)
         else:
-            for data in datas:
-                last_caches = self.search([('res_id', '=', str(data['id'])), ('res_model', '=', model)])
-                if last_caches:
-                    last_caches.write({
-                        'data': json.dumps(data)
-                    })
-                else:
-                    self.create({
-                        'res_id': str(data['id']),
-                        'res_model': model,
-                        'data': json.dumps(data)
-                    })
-        return True
+            datas = old_logs[0][1]
+        return datas
 
-    def sync_to_pos(self, data):
-        if data['model'] == 'product.product':
-            data['price'] = data['list_price']
-        sessions = self.env['pos.session'].sudo().search([
-            ('state', '=', 'opened')
+    def installing_datas(self, model_name, min_id, max_id):
+        cache_obj = self.sudo()
+        log_obj = self.env['pos.call.log'].sudo()
+        domain = [('id', '>=', min_id), ('id', '<=', max_id)]
+        if model_name == 'product.product':
+            domain.append(('available_in_pos', '=', True))
+            domain.append(('sale_ok', '=', True))
+        if model_name == 'res.partner':
+            domain.append(('customer', '=', True))
+        field_list = cache_obj.get_fields_by_model(model_name)
+        datas = self.env[model_name].sudo().search_read(domain, field_list)
+        version_info = odoo.release.version_info[0]
+        if version_info in [12]:
+            datas = log_obj.covert_datetime(model_name, datas)
+        vals = {
+            'active': True,
+            'min_id': min_id,
+            'max_id': max_id,
+            'call_fields': json.dumps(field_list),
+            'call_results': json.dumps(datas),
+            'call_model': model_name,
+            'call_domain': json.dumps(domain),
+        }
+        logs = log_obj.search([
+            ('min_id', '=', min_id),
+            ('max_id', '=', max_id),
+            ('call_model', '=', model_name),
         ])
-        self.insert_data([data], data['model'])
-        for session in sessions:
-            self.env['bus.bus'].sendmany(
-                [[(self.env.cr.dbname, 'pos.sync.data', session.user_id.id), data]])
-        return True
-
-    @api.model
-    def remove_record(self, data):
-        self.search([('res_id', '=', str(data['id'])), ('res_model', '=', data['model'])]).unlink()
-        sessions = self.env['pos.session'].sudo().search([
-            ('state', '=', 'opened')
-        ])
-        data['deleted'] = True
-        for session in sessions:
-            self.env['bus.bus'].sendmany(
-                [[(self.env.cr.dbname, 'pos.sync.data', session.user_id.id), data]])
-        return True
-
-    @api.model
-    def save_parameter_models_load(self, model_datas):
-        # when pos loaded, all params (model name, fields list, context dict will store to backend
-        # and use for cache data loaded to pos
-        set_param = self.env['ir.config_parameter'].sudo().set_param
-        for model_name, value in model_datas.items():
-            set_param(model_name, value)
-        return True
-
-    def get_all_stock_by_stock_id(self, stock_location_id, stock_location_ids=[]):
-        stock_location_ids = stock_location_ids
-        stock_location_ids.append(stock_location_id)
-        stock = self.env['stock.location'].browse(stock_location_id)
-        for stock in stock.child_ids:
-            stock_location_ids.append(stock.id)
-            if stock.child_ids:
-                self.get_all_stock_by_stock_id(stock.id, stock_location_ids)
-        if len(stock_location_ids) == 1:
-            stock_location_ids.append(0)
-        return stock_location_ids
-
-    @api.model
-    def get_product_available_all_stock_location(self, stock_location_id):
-        _logger.info('{get_product_available_all_stock_location}')
-        sql = """
-        with
-          uitstock as (
-          select
-              t.name product, sum(product_qty) sumout, m.product_id, m.product_uom 
-            from stock_move m 
-              left join product_product p on m.product_id = p.id 
-              left join product_template t on p.product_tmpl_id = t.id
-            where
-              m.state like 'done' 
-              and m.location_id in (select id from stock_location where usage like 'internal') 
-              and m.location_dest_id not in (select id from stock_location where usage like 'internal') 
-            group by product_id,product_uom, t.name order by t.name asc
-          ),
-          instock as (
-            select
-              t.list_price purchaseprice, t.name product, sum(product_qty) sumin, m.product_id, m.product_uom
-            from stock_move m
-              left join product_product p on m.product_id = p.id
-              left join product_template t on p.product_tmpl_id = t.id
-            where 
-              m.state like 'done' and m.location_id not in (select id from stock_location where usage like 'internal')
-              and m.location_dest_id in (select id from stock_location where usage like 'internal')
-            group by product_id,product_uom, t.name, t.list_price order by t.name asc
-          ) 
-        select
-          i.product, sumin-coalesce(sumout,0) AS stock, sumin, sumout, purchaseprice, ((sumin-coalesce(sumout,0)) * purchaseprice) as stockvalue
-        from uitstock u 
-          full outer join instock i on u.product = i.product
-        """
-
-    @api.model
-    def get_on_hand_by_stock_location(self, stock_location_id):
-        stock_ids = self.get_all_stock_by_stock_id(stock_location_id, [])
-        if len(stock_ids) > 1:
-            stock_datas = self.get_product_available_filter_by_stock_location_ids(tuple(stock_ids))
+        if logs:
+            logs.write(vals)
         else:
-            stock_datas = self.get_product_available_filter_by_stock_location_id(
-                stock_location_id)
-        if stock_datas == {}:
+            log_obj.create(vals)
+        self.env.cr.commit()
+        cache_obj = self.sudo()
+        log_obj = self.env['pos.call.log'].sudo()
+        domain = [('id', '>=', min_id), ('id', '<=', max_id)]
+        if model_name == 'product.product':
+            domain.append(('available_in_pos', '=', True))
+            domain.append(('sale_ok', '=', True))
+        if model_name == 'res.partner':
+            domain.append(('customer', '=', True))
+        field_list = cache_obj.get_fields_by_model(model_name)
+        datas = self.env[model_name].sudo().search_read(domain, field_list)
+        version_info = odoo.release.version_info[0]
+        if version_info in [12]:
+            datas = log_obj.covert_datetime(model_name, datas)
+        vals = {
+            'active': True,
+            'min_id': min_id,
+            'max_id': max_id,
+            'call_fields': json.dumps(field_list),
+            'call_results': json.dumps(datas),
+            'call_model': model_name,
+            'call_domain': json.dumps(domain),
+        }
+        logs = log_obj.search([
+            ('min_id', '=', min_id),
+            ('max_id', '=', max_id),
+            ('call_model', '=', model_name),
+        ])
+        if logs:
+            logs.write(vals)
+        else:
+            log_obj.create(vals)
+        self.env.cr.commit()
+        return datas
+
+    def reformat_datetime(self, data, model):
+        version_info = odoo.release.version_info[0]
+        if version_info == 12:
+            all_fields = self.env[model].fields_get()
+            for field, value in data.items():
+                if field == 'model':
+                    continue
+                try:
+                    if all_fields[field] and all_fields[field]['type'] in ['date', 'datetime'] and value:
+                        data[field] = value.strftime(DEFAULT_SERVER_DATETIME_FORMAT)
+                except:
+                    _logger.error(
+                        'field %s of model %s could not covert to DEFAULT_SERVER_DATETIME_FORMAT' % (field, model))
+                    continue
+        return data
+
+    @api.model
+    def insert_data(self, model, record_id):
+        if type(model) == list:
             return False
+        last_caches = self.search([('res_id', '=', str(record_id)), ('res_model', '=', model)], limit=1)
+        if last_caches:
+            last_caches.write({
+                'res_model': model,
+                'deleted': False
+            })
         else:
-            return stock_datas
+            self.create({
+                'res_id': str(record_id),
+                'res_model': model,
+                'deleted': False
+            })
+        self.send_notification_pos(model, record_id)
+        return True
 
-    @api.model
-    def get_product_available_filter_by_stock_location_id(self, stock_location_id):
-        _logger.info('{get_product_available_filter_by_stock_location_id}')
-        sql = """
-        with
-            uitstock as (
-                select
-                  t.name product, sum(product_qty) sumout, m.product_id, m.product_uom 
-                from stock_move m 
-                left join product_product p on m.product_id = p.id 
-                left join product_template t on p.product_tmpl_id = t.id
-                where
-                    m.state like 'done'
-                    and t.type = 'product' 
-                    and m.location_id in (select id from stock_location where id=%s) 
-                    and m.location_dest_id not in (select id from stock_location where id=%s) 
-                group by product_id,product_uom, t.name order by t.name asc
-            ),
-            instock as (
-                select
-                    t.list_price purchaseprice, t.name product, sum(product_qty) sumin, m.product_id, m.product_uom
-                from stock_move m
-                left join product_product p on m.product_id = p.id
-                left join product_template t on p.product_tmpl_id = t.id
-                where 
-                    m.state like 'done' and m.location_id not in (select id from stock_location where id=%s)
-                    and m.location_dest_id in (select id from stock_location where id=%s)
-                group by product_id,product_uom, t.name, t.list_price order by t.name asc
-          ) 
-        select
-          i.product_id, i.product, sumin-coalesce(sumout,0) AS stock, sumin, sumout, purchaseprice, ((sumin-coalesce(sumout,0)) * purchaseprice) as stockvalue
-        from uitstock u 
-          full outer join instock i on u.product = i.product
-        """ % (stock_location_id, stock_location_id, stock_location_id, stock_location_id)
-        self.env.cr.execute(sql)
-        results = self.env.cr.fetchall()
-        pos_data = {}
-        for result in results:
-            if result[0]:
-                pos_data[result[0]] = result[2]
-        return pos_data
+    def get_data(self, model, record_id, config_id=None):
+        data = {
+            'model': model
+        }
+        fields_sale_load = self.sudo().get_fields_by_model(model)
+        vals = {}
+        if model == 'pos.order':
+            vals = self.env[model].sudo().search_read(
+                [
+                    ('id', '=', record_id),
+                ],
+                fields_sale_load)
+        if model == 'pos.order.line':
+            vals = self.env[model].sudo().search_read(
+                [
+                    ('id', '=', record_id),
+                ],
+                fields_sale_load)
+        if model not in ['pos.order', 'pos.order.line']:
+            vals = self.env[model].sudo().search_read(
+                [
+                    ('id', '=', record_id),
+                ],
+                fields_sale_load)
+        if vals:
+            data.update(vals[0])
+            data = self.reformat_datetime(data, model)
+            return data
+        else:
+            return None
 
-    @api.model
-    def get_product_available_filter_by_stock_location_ids(self, stock_location_ids):
-        _logger.info('begin get_product_available_filter_by_stock_location_ids')
-        sql_out = """
-                select
-                    sum(product_qty) sumout, m.product_id, t.name product, m.product_uom 
-                from stock_move m 
-                left join product_product p on m.product_id = p.id 
-                left join product_template t on p.product_tmpl_id = t.id
-                where
-                    t.available_in_pos is True
-                    and m.state like 'done'
-                    and t.type = 'product' 
-                    and m.location_id in (select id from stock_location where id in %s) 
-                    and m.location_dest_id not in (select id from stock_location where id in %s)
-                group by product_id,product_uom, t.name order by t.name asc
-            """ % (stock_location_ids, stock_location_ids)
-        self.env.cr.execute(sql_out)
-        results_out = self.env.cr.fetchall()
-        sql_in = """
-                    select
-                        sum(product_qty) sumin, m.product_id, t.name product, t.list_price purchaseprice, m.product_uom
-                    from stock_move m
-                    left join product_product p on m.product_id = p.id
-                    left join product_template t on p.product_tmpl_id = t.id
-                    where 
-                        t.available_in_pos is True
-                        and m.state like 'done' and m.location_id not in (select id from stock_location where id in %s)
-                        and m.location_dest_id in (select id from stock_location where id in %s)
-                    group by product_id,product_uom, t.name, t.list_price order by t.name asc
-                    """ % (stock_location_ids, stock_location_ids)
-        self.env.cr.execute(sql_in)
-        results_in = self.env.cr.fetchall()
-        dict_in = {}
-        for result in results_in:
-            dict_in[result[1]] = result[0]
-        dict_out = {}
-        for result in results_out:
-            dict_out[result[1]] = result[0]
-        for product_id, qty_in in dict_in.items():
-            dict_in[product_id] = dict_in[product_id] - dict_out.get(product_id, 0)
-        return dict_in
+    def remove_record(self, model, record_id):
+        _logger.warning('deleted model %s with id %s' % (model, record_id))
+        records = self.sudo().search([('res_id', '=', str(record_id)), ('res_model', '=', model)])
+        if records:
+            records.write({
+                'deleted': True,
+            })
+        else:
+            vals = {
+                'res_id': str(record_id),
+                'res_model': model,
+                'deleted': True,
+            }
+            self.create(vals)
+        self.send_notification_pos(model, record_id)
+        return True
+
+    def save_parameter_models_load(self, model_datas):
+        reinstall = False
+        for model_name, value in model_datas.items():
+            params = self.env['ir.config_parameter'].sudo().get_param(model_name)
+            if params:
+                params = ast.literal_eval(params)
+                try:
+                    if params.get('fields', []) != value.get('fields', []) or params.get('domain', []) != value.get(
+                            'domain', []) or params.get('context', []) != value.get('context', []):
+                        self.env['ir.config_parameter'].sudo().set_param(model_name, value)
+                        self.env['pos.call.log'].sudo().search([]).unlink()
+                        reinstall = True
+                except:
+                    pass
+            else:
+                self.env['ir.config_parameter'].sudo().set_param(model_name, value)
+        return reinstall

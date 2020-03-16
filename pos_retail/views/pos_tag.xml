@@ -48,8 +48,8 @@
 
         <menuitem id="menu_action_pos_tag"
                   action="action_pos_tag"
-                  parent="menu_retail"
-                  sequence="100"
+                  parent="menu_master_data"
+                  sequence="15"
         />
 
     </data>

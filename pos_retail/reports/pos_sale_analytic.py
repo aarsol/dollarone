@@ -3,6 +3,7 @@ from odoo import models, fields, tools, api
 
 class pos_sale_analytic(models.Model):
     _name = 'pos.sale.analytic'
+    _description = "Report sale analytic"
 
     _auto = False
     _rec_name = 'date'
@@ -10,7 +11,7 @@ class pos_sale_analytic(models.Model):
 
     name = fields.Char('Name')
     user_id = fields.Many2one('res.users', 'Sale person', readonly=1)
-    date = fields.Date(string='Order Date', readonly=1)
+    date = fields.Datetime(string='Order Date', readonly=1)
     product_id = fields.Many2one(
         'product.product', string='Product Variant', readonly=1)
     product_categ_id = fields.Many2one(
@@ -30,7 +31,7 @@ class pos_sale_analytic(models.Model):
         select = """SELECT min(sol.id)*-1 AS id,
             so.name as name,
             so.user_id as user_id,
-            so.date_order::date AS date,
+            so.date_order AS date,
             sol.product_id AS product_id,
             pt.categ_id AS product_categ_id,
             pt.pos_categ_id AS pos_categ_id,
@@ -53,7 +54,7 @@ class pos_sale_analytic(models.Model):
         select = """SELECT min(pol.id) AS id,
             po.name as name,
             po.user_id as user_id,
-            po.date_order::date AS date,
+            po.date_order AS date,
             pol.product_id AS product_id,
             pt.categ_id AS product_categ_id,
             pt.pos_categ_id AS pos_categ_id,
@@ -61,7 +62,7 @@ class pos_sale_analytic(models.Model):
             po.company_id AS company_id,
             'Point of Sale' AS origin,
             sum(pol.qty) AS qty,
-            sum(price_unit * qty - price_unit * qty / 100 * discount) as sale_total
+            sum(pol.price_unit * pol.qty - pol.price_unit * pol.qty / 100 * pol.discount) as sale_total
             FROM pos_order_line pol
             LEFT JOIN pos_order po ON po.id = pol.order_id
             LEFT JOIN product_product pp ON pp.id = pol.product_id

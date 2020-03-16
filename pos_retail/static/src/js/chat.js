@@ -3,13 +3,9 @@ odoo.define('pos_retail.chat', function (require) {
     var chrome = require('point_of_sale.chrome');
     var core = require('web.core');
     var chat_manager = require('mail.chat_manager');
-    var window_manager = require('mail.window_manager');
-    var ajax = require('web.ajax');
     var gui = require('point_of_sale.gui');
-    var popup = require('point_of_sale.popups');
     var PosBaseWidget = require('point_of_sale.BaseWidget');
     var QWeb = core.qweb;
-    var _t = core._t;
 
     chrome.Chrome.include({
         events: {
