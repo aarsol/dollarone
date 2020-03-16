@@ -26,7 +26,7 @@
         'reports/pos_sale_analytic.xml',
         'reports/report_pos_order.xml',
         'datas/email_template.xml',
-        'datas/customer.xml',
+        #'datas/customer.xml',
         'datas/barcode_rule.xml',
         'datas/pos_loyalty_category.xml',
         'datas/product.xml',
