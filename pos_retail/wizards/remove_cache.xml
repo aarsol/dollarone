@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<odoo>
+    <data>
+        <record id="pos_remove_cache_view_form" model="ir.ui.view">
+            <field name="name">pos.remove.cache.form</field>
+            <field name="model">pos.remove.cache</field>
+            <field name="arch" type="xml">
+                <form string="Lost Reason">
+                    <footer>
+                        <button name="remove_cache" string="Submit" type="object" class="btn btn-sm btn-primary"/>
+                        <button string="Cancel" class="btn btn-sm btn-default" special="cancel"/>
+                    </footer>
+                </form>
+            </field>
+        </record>
+
+        <record id="pos_remove_cache_action" model="ir.actions.act_window">
+            <field name="name">Remove Caches</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">pos.remove.cache</field>
+            <field name="view_mode">form</field>
+            <field name="view_id" ref="pos_remove_cache_view_form"/>
+            <field name="target">new</field>
+        </record>
+
+        <menuitem id="menu_caches"
+            name="Caches"
+            parent="point_of_sale.menu_point_root"
+            groups="point_of_sale.group_pos_manager"
+        />
+
+        <menuitem id="menu_pos_remove_cache_action"
+                  parent="menu_caches"
+                  action="pos_remove_cache_action"
+        />
+
+    </data>
+</odoo>

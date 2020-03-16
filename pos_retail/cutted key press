@@ -1,0 +1,72 @@
+
+        var keyCode = e.keyCode;
+        if ($("div.searchbox input").is(':not(:focus)')){
+             if(e.keyCode == 43 || e.keyCode == 107){            // for new order nutton
+                 $(".neworder-button").trigger("click");
+             }
+             if(e.keyCode == 45 || e.keyCode == 109){                  // for delete order button
+                 $(".deleteorder-button").trigger("click");
+             }
+             if(e.keyCode == 33){      // change the order screen  'page up'
+                 $(".order-button.select-order.selected").prev().trigger("click");
+
+             }
+             if(e.keyCode == 34){  //change the order screen 'page down
+                 $(".order-button.select-order.selected").next().trigger("click");
+             }
+        }
+        if($(".product-screen").is(":visible")){    // Screen 1 Product Screen
+             if ($("div.searchbox input").is(':not(:focus)')){
+                 
+                 if(resultarray.total_discount){
+                    if(e.keyCode == resultarray.total_discount) { 
+                        if($(".js_discount").is(":visible")){$(".js_discount").trigger("click");}
+                    }
+                 }
+                 
+                 if(resultarray.price){if(e.keyCode == resultarray.price){$(".pi_price").trigger("click");}}
+                 if(resultarray.qty){if(e.keyCode == resultarray.qty){$(".pi_qty").trigger("click");}}
+                 if(resultarray.disc){if(e.keyCode == resultarray.disc){$(".pi_disc").trigger("click");}}
+                 
+                 if(resultarray.order_note){
+                    if(e.keyCode == resultarray.order_note) { 
+                        $(".btn-order-note").trigger("click");
+                        //if($(".btn-order-note").is(":visible")){$(".btn-order-note").trigger("click");}
+                    }
+                 }
+                 
+                 if(resultarray.line_note){
+                    if(e.keyCode == resultarray.line_note) { 
+                        $(".btn-line-note").trigger("click");
+                        //if($(".btn-line-note").is(":visible")){$(".btn-line-note").trigger("click");}
+                    }
+                 }
+                 
+             }
+         }
+         else if($(".payment-screen").is(":visible")){    // Screen 2 (payment screen)
+    	    if(!$(".paymentline").hasClass("selected")){     // payment methods using numbers (1 to 9)
+                  if (e.keyCode >= 48 && e.keyCode <= 57) {
+                     var  payment_key = '' + (e.keyCode - 48);
+    	             if(e.keyCode == e.keyCode){
+    	                payment_key = payment_key - 1;
+    	                $(".paymentmethods").children().eq(payment_key).trigger('click');
+    	             }
+    	          }
+    	          if (e.keyCode >= 96 && e.keyCode <= 105) {
+                     var  payment_key = '' + (e.keyCode - 96);
+    	             if(e.keyCode == e.keyCode){
+    	                payment_key = payment_key - 1;
+    	                $(".paymentmethods").children().eq(payment_key).trigger('click');
+    	             }
+    	          }
+            }
+    	    if(e.keyCode == 68){         // delete paymnent line 'd' key
+    	         $("tr.paymentline.selected").find("td.delete-button").trigger("click");
+
+    	    }
+
+    	 }
+        	 
+        	 
+    },

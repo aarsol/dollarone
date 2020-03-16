@@ -1,0 +1,185 @@
+<t t-extend="Orderline">
+        <t t-jquery="span[class*='product-name']" t-operation="before">
+            <t t-if="widget.pos.config.display_image_orderline">
+                <img class='orderline_image' t-att-src="line.get_line_image()"/>
+            </t>
+        </t>
+        
+        <!-- Changed by AARSOL for Product name or code separation, instead of display_name -->
+        <t t-jquery="span[class*='product-name']" t-operation="replace">
+            <span class="product-name">
+                <t t-esc="line.get_product().name"/>               
+                <span style="font-size: 9px;">
+		            <t t-esc="line.get_product().default_code"/>                               
+		        </span> 
+                <t t-if="line.get_product().tracking!=='none'">
+                    <i t-attf-class="oe_link_icon fa fa-list oe_icon line-lot-icon #{line.has_valid_product_lot() ? 'oe_green' : 'oe_red' }"/>
+                </t>
+                
+            </span>           
+        </t>
+        
+        <!--
+        < ! - - Added by AARSOL 
+        added || line.get_product().qty_available lt line.quantity in if - - >
+        <t t-jquery=".info-list>t:first-child">
+            this.attr('t-if', "line.get_quantity_str() !== '1' || line.selected || line.get_product().qty_available lt line.quantity ");
+        </t>
+                
+        <! - - Added by AARSOL - - >
+        <t t-jquery="t[t-esc='line.get_quantity_str()']" t-operation="after">
+            <t t-set='qty_available' t-value='line.get_product().qty_available'/>
+            (of <span t-attf-class="qty-info #{qty_available lt line.quantity ? 'not-available':''}"><t t-esc="qty_available"/></span>)
+        </t>
+        -->
+        
+        <t t-jquery=".info-list>t:first-child"  t-operation="replace">
+        	<ul class="info-list">
+                <t t-if="line.get_quantity_str() !== '1' || line.selected || line.get_product().qty_available lt line.quantity ">
+                    <li class="info" t-if="line.get_product().color != 100">
+                        <em>
+                            <t t-esc="line.get_quantity_str()" />
+                            <t t-set='qty_available' t-value='line.get_product().qty_available'/>
+            				(of <span t-attf-class="qty-info #{qty_available lt line.quantity ? 'not-available':''}"><t t-esc="qty_available"/></span>)
+                        </em>
+                        <t t-esc="line.get_unit().name" />
+                        at
+                        <t t-esc="widget.format_currency(line.get_unit_display_price(),'Product Price')" />
+                        /
+                        <t t-esc="line.get_unit().name" />
+                    </li>
+                    <li class="info" t-if="line.get_product().color == 100">
+                        
+                        <t t-esc="line.promotion_reason" />                            
+                        
+                        
+                    </li>
+                </t>
+                <t t-if="line.get_discount_str() !== '0'">
+                    <li class="info">
+                        With a 
+                        <em>
+                            <t t-esc="line.get_discount_str()" />%
+                        </em>
+                        discount
+                    </li>
+                </t>
+            </ul>       
+        </t>
+        
+        <t t-jquery="ul[class*='info-list']" t-operation="append">
+            <!-- display tax -->
+            <t t-if="widget.pos.config.display_tax_orderline and line.get_tax() > 0">
+                <t><i class="fa fa-caret-right"/>Tax: <t t-esc="widget.format_currency(line.get_tax())"/></t>
+            </t>
+            <!-- display amount discount, discount amount -->
+            <t t-if="widget.pos.config.display_amount_discount and line.get_price_discount() > 0">
+                <span class="price">
+                    <t t-if="line.get_price_discount()">
+                        <t t-esc="widget.format_currency(line.get_price_discount())"/>
+                    </t>
+                </span>
+            </t>
+            <!-- combo items -->
+            <t t-if="line.combo_items">
+                <t t-foreach="line.combo_items" t-as="combo_item">
+                    <ul class="bus-info">
+                        <li class="info">
+                            <i class="fa fa-caret-right"/>
+                            <t t-esc="combo_item.product_id[1]" />
+                            with quantity :
+                            <t t-esc="combo_item.quantity" />
+                            <t t-if="combo_item.lot_number">
+                                ,Lot/Serial Number : <t t-esc="combo_item.lot_number" />
+                            </t>
+                            <t t-if="combo_item.use_date">
+                                Expired date of lot: <t t-esc="combo_item.use_date" />
+                            </t>
+                        </li>
+                    </ul>
+                </t>
+            </t>
+            <!-- return line -->
+            <t t-if="line.is_return">
+                <ul class="bus-info">
+                    <li class="return_line">
+                        <i class="fa fa-bug"/>
+                        Return
+                    </li>
+                </ul>
+            </t>
+            <!-- loyalty point -->
+            <ul class="bus-info">
+                <t t-if="line.plus_point">
+                    <span class="line_plus_point"><t t-esc="line.plus_point"/> (plus)</span>
+                </t>
+                <t t-if="line.redeem_point">
+                    <span class="line_redeem_point"><t t-esc="line.redeem_point"/> (redeem)</span>
+                </t>
+            </ul>
+            <!-- variants-->
+            <t t-foreach="line.variants" t-as="variant">
+                <ul class="line-variant">
+                    <li class="info">
+                        <i class="fa fa-caret-right"/>
+                        <t t-esc="variant.value_id[1]" />
+                        <span class='price'>
+                            <i class='fa fa-plus-circle'/>
+                            <t t-esc="widget.format_currency(variant.price_extra, 'Price extra')" />
+                        </span>
+                    </li>
+                </ul>
+            </t>
+            <!-- promotion -->
+            <t t-if="line.promotion">
+                <ul class="promotion-item">
+                    <li class="info">
+                        <i class="fa fa-caret-right"/>
+                        <t t-esc="line.promotion_reason"/>
+                    </li>
+                </ul>
+
+            </t>
+            <!-- display lot number-->
+            <t t-if="line.pack_lot_lines and line.pack_lot_lines.models">
+                <t t-foreach="line.pack_lot_lines.models" t-as="lot_model">
+                    <t t-if="lot_model['attributes']['lot_name']">
+                        <ul class="promotion-item">
+                            <li class="info">
+                                <i class="fa fa-caret-right"/>
+                                Lot/Serial: <t t-esc="lot_model['attributes']['lot_name']"/>
+                            </li>
+                        </ul>
+                    </t>
+                </t>
+            </t>
+            <!-- sync -->
+            <t t-if="widget.pos.config.display_person_add_line">
+                <t t-if="line.session_info and line.session_info.user and line.session_info.date">
+                    <ul class="bus-info">
+                        <li class="info">
+                            <i class="fa fa-caret-right"/>
+                            <t t-esc="line.session_info.user.name"/> added at <t t-esc="line.session_info.date"/>
+                        </li>
+                    </ul>
+                </t>
+            </t>
+            <!-- line note -->
+            <t t-if="line.get_note()">
+                <li class="info orderline-note">
+                    <i class="fa fa-caret-right"/>Note: <t t-esc="line.get_note()" />
+                </li>
+            </t>
+            <!-- display tags line -->
+            <t t-if="line.tags">
+                <ul class="bus-info">
+                    <t t-foreach="line.tags" t-as="tag">
+                        <li class='info' t-att-data-id="tag.id">
+                            <i class="fa fa-caret-right"/><t t-esc="tag.name"/>
+                        </li>
+                    </t>
+                </ul>
+            </t>
+        </t>
+    </t>
+

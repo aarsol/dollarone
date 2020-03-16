@@ -1,0 +1,735 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+<t t-extend="PosTicket">
+    <t t-jquery="div[class*='pos-sale-ticket']" t-operation="replace">
+    
+    <div class="pos-sale-ticket">                   
+        <t t-if="!hideheading">
+            <div class="company_card">                
+                <div class="company_info">
+                    <span  class="company_name"><t t-esc="widget.pos.company.name"/></span><br />
+					<t t-esc="widget.pos.company.street"/>, <t t-esc="widget.pos.company.city"/>, <t t-esc="widget.pos.company.country.name"/><br />
+					<strong>Phone:</strong> <t t-esc="widget.pos.company.phone || ''"/><br />
+					<strong>Website:</strong> <t t-esc="widget.pos.company.website || ''"/><br />
+					<strong>Terminal:</strong> <t t-esc="widget.pos.config.name || ''"/><br />					
+					<!--VAT: <t t-esc="widget.pos.company.vat || ''"/><br /> -->
+					<strong>Served By:</strong> <t t-esc="widget.pos.cashier ? widget.pos.cashier.name : widget.pos.user.name"/>    
+                </div>
+                <div class="company_logo">
+                    <img src='/web/binary/company_logo' style="width:100%"/>
+                </div>                
+            </div>
+            
+            <div name="order_info">
+		        Date: <t t-esc="moment().format('L LT')"/> <br />                   
+		        Receipt: <t t-esc="order.name"/><br />       	            
+		        <t t-set="client" t-value="order.get_client()"/>
+				<t t-if="client and widget.pos.config.receipt_customer_vat">
+					<t t-set="client" t-value="order.get_client()"/>
+					Customer: <t t-esc="client['name']"/><br />
+					Phone (mobile): <t t-esc="client['phone'] || client['mobile'] || ''"/>						
+				</t> 
+				
+				<br />
+               
+				<t t-if="widget.pos.config.booking_orders_display_shipping_receipt">
+				    <t t-if="order.delivery_address">
+				        <div>Shipping information:</div>
+				        Address: <t t-esc="order.delivery_address"/><br />
+				    </t>
+				    <t t-if="order.delivery_date">
+				        Date: <t t-esc="order.delivery_date"/><br />
+				    </t>
+				    <t t-if="order.delivery_phone">
+				        Phone: <t t-esc="order.delivery_phone"/><br />
+				    </t>
+				</t>
+				<t t-if="widget.pos.config.display_fiscal_position_receipt and order.fiscal_position">
+				    <div>Fiscal Position: <t t-esc="order.fiscal_position.name"/><br /></div>
+				</t>
+				<t t-if="order.invoice_number and widget.pos.config.receipt_invoice_number">
+				    <div>Invoice number: <t t-esc="order.invoice_number"/><br /></div>
+
+				</t>      	
+			</div>
+		    
+        
+               
+		    <t t-if="receipt.header">
+		        <div style='text-align:center'>
+		            <t t-esc="receipt.header" />
+		        </div>            
+		    </t>
+        </t>  <!-- !hideheading -->
+        
+
+<!-- Category wise -->        
+<t t-if="widget.pos.config.category_wise_receipt">
+    <t t-set='index' t-value="1"/>
+    <table class='receipt-orderlines'>
+        <tr>
+			<th class="pos-left-align" width='70%' style="border-bottom: dotted 1px #000">ITEMS</th>
+			<th class="pos-right-align" width='13%' style="border-bottom: dotted 1px #000">QTY</th>
+			<th class="pos-right-align" width='17%' style="border-bottom: dotted 1px #000">AMOUNT</th>
+		</tr>  			
+		<!--
+		<tr>
+			<td class="pos-left-align" style="border-bottom: dotted 1px #000">المادة</td>
+			<td class="pos-right-align" style="border-bottom: dotted 1px #000">الكمية</td>
+			<td class="pos-right-align" style="border-bottom: dotted 1px #000">السعر</td>
+		</tr>
+		<t t-esc="index"/>
+		-->
+		<!--<br /> -->
+    
+		<t t-foreach="orderlines_by_category_name" t-as="category">
+		        <t t-set='orderlines' t-value="orderlines_by_category_name[category]" />
+		        
+		        <tr>                    
+		            <td colspan="3">
+		            	<span class="pos_underline">
+		            		Category: <t t-esc="category"/> 
+		            		<t t-if="orderlines.length == 1"> (1) item </t>
+		                	<t t-if="orderlines.length > 1"> (<t t-esc='orderlines.length' />) items </t>
+		                </span>
+		            </td>                    
+		        </tr>
+		    
+		    	<t t-set='index' t-value="index + 1"/>                
+		        <t t-set="csum" t-value="0"></t>
+		        
+		        <tr t-foreach="orderlines" t-as="orderline">
+		            <td style="border-bottom: dotted 1px #000;padding-top:3px;">
+		                
+		                <t t-if="widget.pos.config.display_image_receipt">
+		                    <img class='orderline_image' t-att-src="orderline.get_line_image()"/>
+		                </t>
+		                
+		                <div style="margin-left: 30px; margin-top: -20px; line-height: 1.1em;">
+						    <t t-if="orderline.get_product().variant_categ">
+						        <t t-if="orderline.get_variant_product().length == 1">
+						            <t t-esc="orderline.get_variant_product()[0] and orderline.get_variant_product()[0].name or ''"/> -  <t t-esc="orderline.get_product().display_name"/>   
+						        </t>
+						        <t t-if="orderline.get_variant_product().length > 1">
+						            <t t-esc="orderline.get_product().display_name"/> with Selections		                    
+						        </t>
+						    </t>
+						    <t t-if="!orderline.get_product().variant_categ">
+						        <t t-esc="orderline.get_product().display_name"/>   
+						    </t>					    
+						</div>
+		              
+		               		                
+		                <div t-if="orderline.get_product().color == 100">                        
+				            <t t-esc="orderline.discount_reason" />                     
+				        </div>
+                 
+		                <div t-if="!orderline.get_discount() > 0 and orderline.get_product().color != 100">                                
+		                    Price : <t t-esc='orderline.price' />
+		                    <!--<t t-esc='orderline.price - orderline.get_tax()' /> -->
+		                </div>
+		                
+		                <div t-if="orderline.get_discount() > 0 and orderline.get_product().color != 100">                                
+		                    Price : <span style="text-decoration: line-through;">
+		                    <!-- <t t-esc='orderline.price - orderline.get_tax()' /> -->
+		                    <t t-esc='orderline.price' /></span> 
+		                    <!--<t t-esc='orderline.price - orderline.get_tax() - orderline.get_item_discout()'/> -->                   	   						<t t-esc='orderline.price - orderline.get_item_discout()'/>
+		                    <div class="pos-disc-font">
+		                        With a <t t-esc="orderline.get_discount()"/>% discount
+		                    </div>
+		                </div>
+		                
+		                 <!-- tax -->                            
+		                <!--
+		                <div t-if="widget.pos.config.display_tax_receipt and orderline.get_tax() > 0">                                
+		                    Tax: <t t-esc="widget.format_currency(orderline.get_tax())"/>
+		                </div>
+		                -->
+		                
+		                <!-- Prop notes -->
+						<t t-if="orderline.prop_options">
+							<ul class="bus-info" style="font-size:10px; line-height:14px;">
+								<t t-foreach="orderline.prop_options" t-as="option">															        
+									<li class="info">
+										<i class="fa fa-caret-right"/>
+										<b><t t-esc="option.note_name" /></b> : 	<t t-esc="option.option_name" />									
+									</li>								
+								</t>
+							</ul>			
+						</t>
+						
+		                <!-- Category Variants -->
+						<t t-if="orderline.get_product().variant_categ and orderline.quantity > 1">
+							<ul class="bus-info" style="font-size:10px; line-height:14px;">
+								<t t-foreach="orderline.get_variant_product()" t-as="item">															        
+									<li class="info">
+										<i class="fa fa-caret-down"/>
+										<t t-esc="item.name" /> with Qty: <t t-esc="item.quantity" />											
+									</li>								
+								</t>
+							</ul>			
+						</t>
+				    
+		                <!-- serial number of lot -->
+		                <div t-if="orderline.pack_lot_lines and orderline.pack_lot_lines.models">                                
+		                    <t t-foreach="orderline.pack_lot_lines.models" t-as="lot_model">
+		                        <t t-if="lot_model">
+		                            <div class="pos-disc-font">
+		                                Lot/Serial: <t t-esc="lot_model['attributes']['lot_name']"/>
+		                            </div>
+		                        </t>
+		                    </t>
+		                </div>
+		                		                
+				                
+		                <!-- combo items -->
+						<t t-if="orderline.combo_items">
+							<t t-foreach="orderline.combo_items" t-as="combo_item">
+							    <ul class="bus-info ticket">
+							        <li class="info">			                    
+							            <t t-if="combo_item.variant_categ">
+				                            <t t-if="combo_item.variant_products.length == 1">
+				                                <i class="fa fa-caret-right"/>
+				                                <t t-esc="combo_item.variant_products[0] and combo_item.variant_products[0].name or ''"/> -  <t t-esc="combo_item.product_id[1]"/>
+				                                with qty : <t t-esc="combo_item.quantity" />   
+				                            </t>
+				                            <t t-if="combo_item.variant_products.length > 1">
+				                                <i class="fa fa-caret-down"/>
+				                                <t t-esc="combo_item.product_id[1]"/> with Selections, qty : <t t-esc="combo_item.quantity" />
+				                                <t t-foreach="combo_item.variant_products" t-as="item">
+													<ul class="bus-info">					            
+														<li class="info">
+															<i class="fa fa-caret-right"/>
+															<t t-esc="item.name" /> with qty: 	<t t-esc="item.quantity" />											
+														</li>
+													</ul>
+												</t>			 		                    
+				                            </t>
+				                        </t>
+				                        
+				                        <t t-if="!combo_item.variant_categ">
+				                            <i class="fa fa-caret-right"/>
+				                            <t t-esc="combo_item.product_id[1]"/> with qty : <t t-esc="combo_item.quantity" />    
+				                        </t>
+				                        
+							            <t t-if="combo_item.lot_number">
+							                ,Lot/Serial Number : <t t-esc="combo_item.lot_number" />
+							            </t>
+							            <t t-if="combo_item.use_date">
+							                Expired date of lot: <t t-esc="combo_item.use_date" />
+							            </t>
+							        </li>
+							        <t t-if="combo_item.note">
+							            <ul class="bus-info ticket sub">
+									        <li class="info">					                    
+									            <t t-esc="combo_item.note" />
+									        </li>
+									    </ul>
+							        </t>
+							        <t t-if="combo_item.variants">
+							            <t t-foreach="combo_item.variants" t-as="variant">
+											<ul class="bus-info ticket sub">
+												<li class="info">											
+													<t t-esc="variant.value_id[1]" />												
+												</li>
+											</ul>
+										</t>
+							        </t>
+							    </ul>
+							</t>
+						</t>               
+		                 <!-- multi variant -->
+		                <div t-if="orderline.variants">
+		                    <t t-foreach="orderline.variants" t-as="variant">
+		                        <div class="pos-disc-font">
+		                            <left>
+		                                <t t-esc="variant.value_id[1]"/>
+		                                <t t-esc="widget.format_currency(variant.price_extra, 'Price extra')" />
+		                            </left>
+		                        </div>
+		                    </t>
+		                </div>
+		                <!-- tags -->
+		                <div t-if="orderline.tags">                               
+		                    <t t-foreach="orderline.tags" t-as="tag">
+		                        <div class="pos-disc-font">
+		                            <left>
+		                                <span class='bus-info' t-att-data-id="tag.id">
+		                                    <i class="fa fa-tag">
+		                                        <t t-esc="tag.name"/>
+		                                    </i>
+		                                </span>
+		                            </left>
+		                        </div>
+		                    </t>
+		                </div>
+		                <!-- notes -->
+		                <div t-if="orderline.note">                                                               
+			                <div class="pos-disc-font">
+			                    <i class="fa fa-tag">
+			                   		<t t-esc="orderline.note"/>	
+			                    </i>			                               
+			                </div>                                
+		                </div>
+		            </td>  <!-- Item Column -->
+		            
+		            
+		            <td class="pos-right-align" style="border-bottom: dotted 1px #000">
+		                <t t-esc="orderline.get_quantity_str_with_unit()"/>
+		            </td>
+		            <td class="pos-right-align" style="border-bottom: dotted 1px #000">                        
+		                <t t-esc="widget.format_currency_no_symbol(orderline.get_display_price())"/>
+		                <!--
+		                <span style="padding: 0;float: right; font-size: 11px;color: goldenrod">
+							<t t-if="orderline.get_tax()">
+								Tax:<t t-esc="widget.format_currency(orderline.get_tax())"/>
+							</t>
+						</span>
+						-->
+		            </td>
+		            <t t-set="csum" t-value="csum + orderline.get_display_price()"/>
+		        </tr>  <!-- Order Line -->
+		        
+		        <!-- Category subtotal -->
+				<tr class="empch">
+					<td style="border-bottom: dotted 1px #000">Subtotal: <t t-esc="category"/></td>
+				    <td colspan="2" class="pos-right-align pos_underline">
+				       <t t-esc="widget.format_currency(csum)"/>
+				    </td>
+				</tr>
+				
+		    
+		</t> <!-- category -->
+		
+		
+		        
+		        
+    </table>
+</t>
+
+<!-- Without Category wise -->        
+<t t-if="!widget.pos.config.category_wise_receipt">
+    <table class='receipt-orderlines'>
+        <tr>
+			<th class="pos-left-align" width='70%' style="border-top: dotted 1px #000">ITEMS</th>
+			<th class="pos-right-align" width='13%' style="border-top: dotted 1px #000">QTY</th>
+			<th class="pos-right-align" width='17%' style="border-top: dotted 1px #000">PRICE</th>
+		</tr>  		
+        <tr t-foreach="orderlines" t-as="orderline">
+            <td style="border-bottom: dotted 1px #000;padding-top:3px;">
+                
+                <t t-if="widget.pos.config.display_image_receipt">
+                    <img class='orderline_receipt_image' t-att-src="orderline.get_line_image()"/>
+                </t>
+                
+                <!--
+                <div style="margin-left: 30px; margin-top: -20px; line-height: 1.1em;">
+				    <t t-if="orderline.get_product().variant_categ">
+				        <t t-if="orderline.get_variant_product().length == 1">
+				            <t t-esc="orderline.get_variant_product()[0] and orderline.get_variant_product()[0].name or ''"/> -  <t t-esc="orderline.get_product().display_name"/>   
+				        </t>
+				        <t t-if="orderline.get_variant_product().length > 1">
+				            <t t-esc="orderline.get_product().display_name"/> with Selections		                    
+				        </t>
+				    </t>
+				    <t t-if="!orderline.get_product().variant_categ">
+				        <t t-esc="orderline.get_product().display_name"/>   
+				    </t>					    
+				</div>
+				-->	
+				
+				<div style="margin-left: 50px; margin-top: -40px; line-height: 1.1em;">				    
+				    <t t-esc="orderline.get_product().display_name"/>   				   					    
+				</div>	
+              
+                <div t-if="orderline.get_product().color == 100">                        
+                    <t t-esc="orderline.discount_reason" />                     
+                </div>
+                
+                <div style="margin-left: 50px;" t-if="!orderline.get_discount() > 0 and orderline.get_product().color != 100">                                
+                    Price : <t t-esc='orderline.price - orderline.get_tax()' />                                
+                </div>
+                
+                <div style="margin-left: 50px;" t-if="orderline.get_discount() > 0 and orderline.get_product().color != 100">                                
+                    Price : <span style="text-decoration: line-through;"><t t-esc='orderline.price - orderline.get_tax()' /></span> 
+                    	  <t t-esc='orderline.price - orderline.get_tax() - orderline.get_item_discout()' />		                    	   
+                    <div class="pos-disc-font">
+                        With a <t t-esc="orderline.get_discount()"/>% discount
+                    </div>
+                </div>
+                
+                
+                <!-- tax -->
+                <!--
+                <t t-if="widget.pos.config.display_tax_receipt and orderline.get_tax() > 0">
+                    <br/>
+                    Tax: <t t-esc="widget.format_currency(orderline.get_tax())"/>
+                </t>
+                -->
+                
+                <!-- Prop notes -->
+				<!--
+				<t t-if="orderline.prop_options">
+					<ul class="bus-info" style="font-size:10px; line-height:14px;">
+						<t t-foreach="orderline.prop_options" t-as="option">															        
+							<li class="info">
+								<i class="fa fa-caret-right"/>
+								<b><t t-esc="option.note_name" /></b> : 	<t t-esc="option.option_name" />									
+							</li>								
+						</t>
+					</ul>			
+				</t>
+				-->		
+                <!-- Category Variants -->
+				<!--
+				<t t-if="orderline.get_product().variant_categ and orderline.quantity > 1">
+					<ul class="bus-info" style="font-size:10px; line-height:14px;">
+						<t t-foreach="orderline.get_variant_product()" t-as="item">															        
+							<li class="info">
+								<i class="fa fa-caret-down"/>
+								<t t-esc="item.name" /> with Qty: <t t-esc="item.quantity" />											
+							</li>								
+						</t>
+					</ul>			
+				</t>
+				-->		                      
+                <!-- serial number of lot -->
+                <div t-if="orderline.pack_lot_lines and orderline.pack_lot_lines.models">
+                    
+                    <t t-foreach="orderline.pack_lot_lines.models" t-as="lot_model">
+                        <t t-if="lot_model">
+                            <div class="pos-disc-font">
+                                Lot/Serial: <t t-esc="lot_model['attributes']['lot_name']"/>
+                            </div>
+                        </t>
+                    </t>
+                </div>
+                             
+                
+                <!-- combo items -->
+			    <!--
+			    <t t-if="orderline.combo_items">
+			        <t t-foreach="orderline.combo_items" t-as="combo_item">
+			            <ul class="bus-info">
+			                <li class="info">			                    
+			                    <t t-if="combo_item.variant_categ">
+		                            <t t-if="combo_item.variant_products.length == 1">
+		                                <i class="fa fa-caret-right"/>
+		                                <t t-esc="combo_item.variant_products[0] and combo_item.variant_products[0].name or ''"/> -  <t t-esc="combo_item.product_id[1]"/>
+		                                with qty : <t t-esc="combo_item.quantity" />   
+		                            </t>
+		                            <t t-if="combo_item.variant_products.length > 1">
+		                                <i class="fa fa-caret-down"/>
+		                                <t t-esc="combo_item.product_id[1]"/> with Selections, qty : <t t-esc="combo_item.quantity" />
+		                                <t t-foreach="combo_item.variant_products" t-as="item">
+											<ul class="bus-info">					            
+												<li class="info">
+													<i class="fa fa-caret-right"/>
+													<t t-esc="item.name" /> with qty: 	<t t-esc="item.quantity" />											
+												</li>
+											</ul>
+										</t>			 		                    
+		                            </t>
+		                        </t>
+		                        
+		                        <t t-if="!combo_item.variant_categ">
+		                            <i class="fa fa-caret-right"/>
+		                            <t t-esc="combo_item.product_id[1]"/> with qty : <t t-esc="combo_item.quantity" />    
+		                        </t>
+				                        
+			                    <t t-if="combo_item.lot_number">
+			                        ,Lot/Serial Number : <t t-esc="combo_item.lot_number" />
+			                    </t>
+			                    <t t-if="combo_item.use_date">
+			                        Expired date of lot: <t t-esc="combo_item.use_date" />
+			                    </t>
+			                </li>
+			                <t t-if="combo_item.note">
+			                    <ul class="bus-info">
+					                <li class="info">					                    
+					                    <t t-esc="combo_item.note" />
+					                </li>
+					            </ul>
+			                </t>
+			                <t t-if="combo_item.variants">
+			                    <t t-foreach="combo_item.variants" t-as="variant">
+									<ul class="line-variant bus-info">
+										<li class="info">											
+											<t t-esc="variant.value_id[1]" />												
+										</li>
+									</ul>
+								</t>
+			                </t>
+			            </ul>
+			        </t>
+			    </t>
+                -->
+                
+                <!-- multi variant -->
+                <!--
+                <div t-if="orderline.variants">
+                    <t t-foreach="orderline.variants" t-as="variant">
+                        <div class="pos-disc-font">
+                            <left>
+                                <t t-esc="variant.value_id[1]"/>
+                                <t t-esc="widget.format_currency(variant.price_extra, 'Price extra')" />
+                            </left>
+                        </div>
+                    </t>
+                </div>
+                -->
+                <!-- tags -->
+                <div t-if="orderline.tags">
+                    
+                    <t t-foreach="orderline.tags" t-as="tag">
+                        <div class="pos-disc-font">
+                            <left>
+                                <span class='bus-info' t-att-data-id="tag.id">
+                                    <i class="fa fa-tag">
+                                        <t t-esc="tag.name"/>
+                                    </i>
+                                </span>
+                            </left>
+                        </div>
+                    </t>
+                </div>
+                <!-- notes -->
+                <div t-if="orderline.note">                                                               
+	                <div class="pos-disc-font">
+	                    <i class="fa fa-tag">
+	                   		<t t-esc="orderline.note"/>	
+	                    </i>			                               
+	                </div>                                
+                </div>
+            </td> <!-- Item Column -->
+            
+            <td class="pos-right-align" style="border-bottom: dotted 1px #000">
+                <t t-esc="orderline.get_quantity_str_with_unit()"/>
+            </td>
+            <td class="pos-right-align" style="border-bottom: dotted 1px #000">
+                <t t-esc="widget.format_currency_no_symbol(orderline.get_display_price())"/>
+            </td>
+        </tr>
+    </table>
+</t>
+
+<!-- Subtotal and Totals -->        
+<table class='receipt-total'>
+    <tr><td>&#160;</td></tr>
+    <tr>
+        <td>Subtotal:</td>        
+        <td class="pos-right-align">
+            <t t-esc="widget.format_currency(order.get_total_before_tax())"/>
+        </td>
+    </tr>
+        
+    <t t-foreach="order.get_tax_details()" t-as="taxdetail">
+        <tr>
+            <td  style="border-bottom: dotted 1px #000"><t t-esc="taxdetail.name" /></td>
+            <td class="pos-right-align"  style="border-bottom: dotted 1px #000">
+                <t t-esc="widget.format_currency(taxdetail.amount)" />
+            </td>
+        </tr>
+    </t>
+    
+    <tr t-if="order.get_total_discount() > 0.0">
+        <td  style="border-bottom: dotted 1px #000">You Saved: <t t-esc="widget.format_currency(order.get_total_discount())"/></td>        
+        <td class="pos-right-align"  style="border-bottom: dotted 1px #000">
+            &#160;<!--<t t-esc="widget.format_currency(order.get_order_discount())"/>-->
+        </td> 
+    </tr>
+	           
+    <tr class="emph">
+        <td  style="border-bottom: dotted 1px #000">Total:</td>
+        <td class="pos-right-align"  style="border-bottom: dotted 1px #000">
+            <t t-esc="widget.format_currency(order.get_total_with_tax())"/>
+        </td>
+    </tr>
+    
+    <t t-if="order.amount_debit">
+        <tr class="emph">
+            <td>Debit :</td>
+            <td class="pos-right-align">
+                <t t-esc="widget.format_currency(order.amount_debit)"/>
+            </td>
+        </tr>
+    </t>
+    
+	
+</table>
+        
+<br />
+<table class='receipt-paymentlines'>
+    <t t-foreach="paymentlines" t-as="line">
+      <tr>
+          <td>
+              <t t-esc="line.name"/>
+          </td>
+          <td class="pos-right-align">
+              <t t-esc="widget.format_currency(line.get_amount())"/>
+          </td>
+      </tr>
+    </t>
+</table>
+
+<table class='receipt-change'>
+    <tr><td style="border-bottom: dotted 1px #000">Change:</td>
+		<td class="pos-right-align" style="border-bottom: dotted 1px #000">
+        	<t t-esc="widget.format_currency(order.get_change())"/>
+        </td>
+	</tr>	
+</table>
+        
+<table>
+    <t t-if="order.plus_point">
+        <td class="pos-right-align point">
+            Point plus: <t t-esc="order.plus_point"/>
+        </td>
+    </t>
+    <t t-if="order.redeem_point">
+        <td class="pos-right-align point">
+            Point redeem: <t t-esc="order.redeem_point"/>
+        </td>
+    </t>
+</table>
+
+	<!-- Order Note -->
+	<t t-if="order.note">
+		<table>
+		    <t t-if="order.note">
+		        <tr>
+		            <td>Note:</td>
+		            <td class="pos-right-align">
+		                <t t-esc="order.note" />
+		            </td>
+		        </tr>
+		    </t>
+		</table>
+	</t>
+
+	<t t-if="order.signature">
+		<table>
+		    <tr>
+		        <td>Signature:</td>
+		        <td class="pos-right-align">
+		            <img class="product-img signature"
+		             t-att-src="widget.pos.get_order().get_signature() || ''"
+		             style="max-height:400px;max-width:100px"
+		        />
+		        </td>
+		    </tr>
+		</table>
+	</t>
+      
+	<t t-if="receipt.footer">
+		<br />
+		<div style='text-align:center'>
+		    <t t-esc="receipt.footer" />
+		</div>
+	</t>
+		    
+    <t t-if="widget.pos.config.display_return_days_receipt">
+        <div class='pos-expire-date' font="b">
+            Return within: <t t-esc="widget.pos.config.pos_order_period_return_days"/> days
+        </div>
+    </t>
+    <!--<img id="barcode"/> -->
+    <div align="center" style="margin-top: 2px;"><img style="height: 70px;" id="barcode"/></div>	
+            
+	<div class="pos-center-align"> Thanks for Visiting.  شكرا لزيارتكم</div>
+    
+    <div class="pos-center-align"> Software By: www.aarsol.com</div>
+
+        
+    </div>
+    </t>
+    
+    
+    
+    
+</t>
+    <t t-name="daily_report_user_xml">
+        <receipt align='center' width='40' value-thousands-separator='' >
+            <h3>Daily report sale</h3>
+            <t t-foreach='datas' t-as='data'>
+                <div font='b'>
+                    <t t-if='data.user'>
+                        <div class='cashier'>
+                            <div>---****-----</div>
+                            <div><h3><t t-esc="user['display_name']" /></h3></div>
+                        </div>
+                    </t>
+                </div>
+                <br /><br />
+                <div class='data.orderlines' line-ratio='0.6'>
+                    <t t-foreach='orderlines' t-as='line'>
+                        <line>
+                            <left>
+                                <t t-esc='line.product_id[1]' />
+                                With qty:
+                                <t t-esc='line.quantity' />
+                            </left>
+                            <right>
+                                <value t-att-value-decimals='pos.currency.decimals'>
+                                    <t t-esc='line.price_unit' />
+                                </value>
+                            </right>
+                        </line>
+                    </t>
+                </div>
+                <line><right>***</right></line>
+                <line class='total' size='double-height'>
+                    <left><pre>        TOTAL</pre></left>
+                    <right><value t-att-value-decimals='pos.currency.decimals'><t t-esc='data.amount_total' /></value></right>
+                </line>
+                <line><right>***</right></line>
+            </t>
+        </receipt>
+    </t>
+
+    <t t-name="daily_report_user_html">
+        <div class="pos-sale-ticket">
+            <div class="pos-center-align"><h3>Daily report</h3></div>
+            <t t-foreach='datas' t-as='data'>
+                <div class="pos-center-align">
+                    <t t-if='user'>
+                        <div class='cashier'>
+                            <div><h3><t t-esc="user['display_name']" /></h3></div>
+                        </div>
+                    </t>
+                </div>
+                <br/>
+                <table class='receipt-orderlines'>
+                    <colgroup>
+                        <col width='50%' />
+                        <col width='25%' />
+                        <col width='25%' />
+                    </colgroup>
+                    <tr t-foreach="data.orderlines" t-as="line">
+                        <td>
+                            <img class='orderline_image' t-att-src="widget.product_icon_url(line['product_id'][0])"/>
+                            <t t-esc='line.product_id[1]' />
+                        </td>
+                        <td class="pos-right-align">
+                            <t t-esc='line.qty' />
+                        </td>
+                        <td class="pos-right-align">
+                            <t t-esc="widget.format_currency(line.price_unit)"/>
+                        </td>
+                    </tr>
+                </table>
+                <br />
+                <table class='receipt-total'>
+                    <tr>
+                        <td>Total:</td>
+                        <td class="pos-right-align">
+                            <t t-esc="widget.format_currency(data.amount_total)"/>
+                        </td>
+                    </tr>
+                </table>
+            </t>
+        </div>
+    </t>
+
+</templates>

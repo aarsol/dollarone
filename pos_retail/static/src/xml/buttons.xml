@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates id="template" xml:space="preserve">
+
+    <t t-name="button_create_internal_transfer">
+        <button class="aarsol-btn btn-internal">
+        	<div class="button-icon"><i class='fa fa-truck' /></div>
+        	<div class="button-text">Internal Transfer</div>           
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_internal_transfer' /></div>			
+        </button>
+    </t>
+    
+    <t t-name="button_create_purchase_order">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_purchase_order.substr(0,widget.pos.config.keyboard_purchase_order.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_purchase_order.substr(-1)' />     
+        <button class="aarsol-btn btn-create-po">
+            <div class="button-icon"><i class='fa fa-shopping-cart' /></div>
+        	<div class="button-text">Create PO</div>           
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>           
+        </button>
+    </t>    
+    
+    <t t-name="button_create_sale_order">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_sale_order.substr(0,widget.pos.config.keyboard_sale_order.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_sale_order.substr(-1)' />     
+        <button class="aarsol-btn btn-create-so">
+            <div class="button-icon"><i class='fa fa-shopping-bag' /></div>
+        	<div class="button-text">Create SO</div>                               
+           	<div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>     
+        </button>
+    </t>
+    
+    <t t-name="button_combo">
+        <t t-set='f_key' t-value='widget.pos.config.keyboard_combo.substr(0,widget.pos.config.keyboard_combo.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_combo.substr(-1)' />     
+        <button class="aarsol-btn btn-combo">
+            <div class="button-icon"><i class='fa fa-cubes' /></div>
+        	<div class="button-text">Add Pack/Combo</div>                        
+           	<div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>     
+        </button>
+    </t>
+    
+    <t t-name="button_combo_item_add_lot">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_combo_lot.substr(0,widget.pos.config.keyboard_combo_lot.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_combo_lot.substr(-1)' />     
+        <button class="aarsol-btn btn-combo-lot">
+            <div class="button-icon"><i class='fa fa-sliders' /></div>
+        	<div class="button-text">Add lot combo items</div>                       
+           	<div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>     		
+        </button>
+    </t>    
+
+    <t t-name="button_global_discount">
+        <button class="aarsol-btn btn-global-discount">
+            <div class="button-icon"><i class='fa fa-keyboard-o' /></div>
+        	<div class="button-text">Global Discount</div>                 
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_global_discount' /></div>    		
+        </button>
+    </t>
+    
+    <t t-name="button_fixed_discount">        
+        <button class="aarsol-btn btn-direct-discount">
+            <div class="button-icon"><i class='fa fa-tag' /></div>
+        	<div class="button-text">Direct Discount</div>                       
+           	<div class='key-tag'><t t-esc='widget.pos.config.keyboard_direct_discount' /></div>			
+	    </button>        
+    </t>
+    
+    <t t-name="button_print_voucher">
+        <button class="aarsol-btn btn-voucher">
+            <div class="button-icon"><i class='fa fa-print' /></div>
+        	<div class="button-text">Print Voucher</div>                         
+           	<div class='key-tag'><t t-esc='widget.pos.config.keyboard_voucher' /></div>			
+        </button>
+    </t>
+    
+    <t t-name="button_kitchen_receipt_screen">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_kitchen.substr(0,widget.pos.config.keyboard_kitchen.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_kitchen.substr(-1)' />   
+        <button class="aarsol-btn btn-kitchen">
+            <div class="button-icon"><i class='fa fa-print' /></div>
+        	<div class="button-text">Kitchen Receipt</div>                       
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>  
+        </button>
+    </t>    
+    
+    <t t-name="button_lock_unlock_order">
+        <button class="aarsol-btn btn-unlock">
+            <div class="button-icon"><i class='fa fa-unlock' /></div>
+        	<div class="button-text">Lock order</div>                           
+            <span class='key-tag'><t t-esc='widget.pos.config.keyboard_unlock' /></span>			
+        </button>
+    </t>
+    
+    <t t-name="reward_button btn-reward">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_reward.substr(0,widget.pos.config.keyboard_reward.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_reward.substr(-1)' />     
+        <button class="aarsol-btn">
+            <div class="button-icon"><i class='fa fa-gift' /></div>
+        	<div class="button-text">Rewards Program</div>                       
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>  	
+        </button>
+    </t>   
+   
+    <t t-name="button_change_unit">
+        <button class="aarsol-btn">
+            <div class="button-icon"><i class='fa fa-sliders' /></div>
+        	<div class="button-text">Change Unit</div>                       
+            
+        </button>
+    </t>
+    
+    <t t-name="button_line_note">
+        <t t-set='f_key' t-value='widget.pos.config.keyboard_line_note.substr(0,widget.pos.config.keyboard_line_note.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_line_note.substr(-1)' />  
+        <button class='aarsol-btn btn-line-note'>
+            <div class="button-icon"><i class='fa fa-comment' /></div>
+        	<div class="button-text">Line Note</div>           
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>    	
+        </button>
+    </t>
+    
+    <t t-name="button_order_note">
+        <t t-set='f_key' t-value='widget.pos.config.keyboard_order_note.substr(0,widget.pos.config.keyboard_order_note.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_order_note.substr(-1)' />  
+        <button class='aarsol-btn btn-order-note'>
+            <div class="button-icon"><i class='fa fa-commenting-o' /></div>
+        	<div class="button-text">Order Note</div>                            
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>    	
+        </button>
+    </t>
+
+    <t t-name="button_order_signature">
+        <t t-set='f_key' t-value='widget.pos.config.keyboard_order_signature.substr(0,widget.pos.config.keyboard_order_signature.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_order_signature.substr(-1)' />  
+        <button class="aarsol-btn btn-order-signature">
+            <div class="button-icon"><i class='fa fa-edit' /></div>
+        	<div class="button-text">Signature order</div>
+        	<div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>           
+        </button>
+    </t>
+    
+    <t t-name="button_print_receipt">
+        <button class="aarsol-btn btn-print-lastorder">
+            <div class="button-icon"><i class='fa fa-print' /></div>
+        	<div class="button-text">Print Receipt</div>           
+                        
+        </button>
+    </t>
+    
+    <t t-name="button_print_last_order">
+        <t t-set='f_key' t-value='widget.pos.config.keyboard_print_last_order.substr(0,widget.pos.config.keyboard_print_last_order.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_print_last_order.substr(-1)' />  
+        <button class="aarsol-btn btn-last-order">
+            <div class="button-icon"><i class='fa fa-print' /></div>
+        	<div class="button-text">Receipt last order</div>                            
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>           
+        </button>
+    </t>
+    
+    <t t-name="button_add_variants">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_variants.substr(0,widget.pos.config.keyboard_variants.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_variants.substr(-1)' />    
+        <button class="aarsol-btn">
+            <div class="button-icon"><i class='fa fa-sliders' /></div>
+        	<div class="button-text">Add Variants</div>                       
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>  
+        </button>
+    </t>  
+    
+    <t t-name="button_promotion">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_promotions.substr(0,widget.pos.config.keyboard_promotions.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_promotions.substr(-1)' />     
+        <button class="aarsol-btn btn-promotions">
+            <div class="button-icon"><i class='fa fa-gift' /></div>
+        	<div class="button-text">Add Promotions</div>                      
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>  	
+        </button>
+    </t>
+    
+    <t t-name="button_register_payment">
+        <button class='aarsol-btn'>
+            <div class="button-icon"><i class='fa fa-tag' /></div>
+        	<div class="button-text">Register payment</div>           
+            
+        </button>
+    </t>
+    
+    <t t-name="button_set_tags">
+        <button class="aarsol-btn">
+            <div class="button-icon"><i class='fa fa-sliders' /></div>
+        	<div class="button-text">Add Tags</div>           
+           
+        </button>
+    </t>    
+    
+    <t t-name="button_return_products">
+        <button class="aarsol-btn btn-return-products">
+            <div class="button-icon"><i class='fa fa-building' /></div>
+        	<div class="button-text">Fast Return</div>                            
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_return_products' /></div>			
+        </button>
+    </t>
+    
+    <t t-name="button_go_invoice_screen">
+        <button class="aarsol-btn btn-invoices">
+            <div class="button-icon"><i class='fa fa-search' /></div>
+        	<div class="button-text">Invoices</div>                      
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_invoices' /></div>	
+        </button>
+    </t>    
+    
+    <t t-name="product_operation_button">
+        <t t-set='f_key' t-value='widget.pos.config.keyboard_products.substr(0,widget.pos.config.keyboard_products.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_products.substr(-1)' />     
+        <button class="aarsol-btn btn-products">
+            <div class="button-icon"><i class='fa fa-barcode' /></div>
+        	<div class="button-text">Products</div>                             
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>  	
+            
+        </button>
+    </t>
+    
+    <t t-name="button_print_test">
+        <button class="aarsol-btn">
+            <div class="button-icon"><i class='fa fa-bug' /></div>
+        	<div class="button-text">Test Printer</div>           
+                        
+        </button>
+    </t>
+    
+    <t t-name="button_selection_pricelist">
+        <button class="aarsol-btn">
+            <div class="button-icon"><i class='fa fa-sliders' /></div>
+        	<div class="button-text"><t t-esc='widget.get_order_pricelist()'/></div>           
+            
+        </button>
+    </t>
+    
+    <!-- change stype button core -->
+    <t t-extend="DiscountButton">
+        <t t-jquery=".js_discount" t-operation="replace">           
+            <button class="aarsol-btn">
+            	<div class="button-icon"><i class='fa fa-tag' /></div>
+        		<div class="button-text">Discount</div>           
+            	
+            </button>
+        </t>
+    </t>
+    
+    <t t-extend="SetPricelistButton">
+        <t t-jquery=".o_pricelist_button" t-operation="replace">            
+            <button class="aarsol-btn">
+            	<div class="button-icon"><i class='fa fa-th-list' /></div>
+        		<div class="button-text"><t t-esc='widget.get_current_pricelist_name()'/></div>           
+            	
+            </button>
+        </t>
+    </t>   
+    
+
+    <t t-name="button_lock_screen">
+        <button class="btn-danger aarsol-btn btn-lock-screen">
+            <div class="button-icon"><i class='fa fa-lock' /></div>
+        	<div class="button-text">Logout Screen</div>                       
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_lock_screen' /></div>	
+        </button>       
+    </t>
+    
+    <t t-name="button_print_user_card">
+    	<t t-set='f_key' t-value='widget.pos.config.keyboard_print_user_card.substr(0,widget.pos.config.keyboard_print_user_card.length-1)' /> 
+        <t t-set='s_key' t-value='widget.pos.config.keyboard_print_user_card.substr(-1)' />    
+        <button class="aarsol-btn btn-warning">
+            <div class="button-icon"><i class='fa fa-print' /></div>
+        	<div class="button-text">Print user card</div>                       
+            <div class='key-tag'><t t-esc="s_key" /></div>
+            <div class='key-tag2'><t t-esc="f_key" /></div>  
+        </button>
+    </t>    
+    
+    <t t-name="button_daily_report">
+        <button class="aarsol-btn btn-success btn-daily-report">
+            <div class="button-icon"><i class='fa fa-signal' /></div>
+        	<div class="button-text">Daily report</div>           
+                      
+        </button>
+    </t>
+
+       
+    <t t-name="button_clear_order">
+        <button class="aarsol-btn btn-default btn-clean-order">
+            <div class="button-icon"><i class='fa fa-trash' /></div>
+        	<div class="button-text">Clean empty orde</div>           
+           
+        </button>
+    </t>
+    
+    <t t-name="button_booking_order">
+        <button class="aarsol-btn btn-booking">
+            <div class="button-icon"><i class='fa fa-shopping-basket' /></div>
+        	<div class="button-text">Booking order</div>                      
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_booking' /></div>			
+        </button>
+    </t>
+    
+    <t t-name="button_go_sale_orders_screen">
+        <button class="aarsol-btn btn-booked">            
+            <div class="button-icon"><i class='fa fa-book' /></div>
+        	<div class="button-text"><span class="booked_orders">0 </span>SO orders</div>                                  
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_booked' /></div>			
+        </button>
+    </t>   
+    
+    <t t-name="button_go_pos_orders_screen">
+        <button class="aarsol-btn btn-pos-orders">
+            <div class="button-icon"><i class='fa fa-search' /></div>
+        	<div class="button-text">POS Orders</div>                       
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_pos_orders' /></div>			
+        </button>
+    </t>
+    
+    <t t-name="button_delivery_order">
+        <button class="aarsol-btn btn-delivery">
+            <div class="button-icon"><i class='fa fa-truck' /></div>
+        	<div class="button-text">Delivery order</div>                           
+            <div class='key-tag'><t t-esc='widget.pos.config.keyboard_delivery' /></div>			
+        </button>
+    </t>   
+
+    <t t-name="button_lock_session">
+        <div class="aarsol-btn btn-lock-session">
+            <div class="button-icon"><i class='fa fa-lock' /></div>
+        	<div class="button-text">Lock Session</div>           
+                       
+        </div>
+    </t>
+
+    <t t-name="button_set_location"> <!-- change stock location -->
+        <button class="aarsol-btn btn-location">
+            <div class="button-icon"><i class='fa fa-th' /></div>
+        	<div class="button-text"><t t-esc="widget.pos.get_location()['name']"/></div>           
+           
+        </button>       
+    </t>
+
+    <t t-name="button_restart_session">
+        <button class="aarsol-btn btn-user">
+            <div class="button-icon"><i class='fa fa-user' /></div>
+        	<div class="button-text"><t t-esc="widget.pos.get_config()['name']"/></div>                       
+        </button>       
+    </t>
+    
+    <t t-name="SetFiscalPositionButton">
+        <button class="aarsol-btn btn-fiscal">
+            <div class="button-icon"><i class='fa fa-book' /></div>
+        	<div class="button-text"><t t-esc='widget.get_current_fiscal_position_name()'/></div>                       
+        </button>       
+    </t>
+    
+</templates>

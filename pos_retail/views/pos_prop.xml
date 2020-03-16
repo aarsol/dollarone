@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<odoo>
+    <data>
+
+        <record id="pos_product_prop_form" model="ir.ui.view">
+            <field name="name">pos.product.prop.form</field>
+            <field name="model">pos.product.prop</field>
+            <field name="arch" type="xml">
+                <form string="Prop Note">
+                    <sheet>
+                        <group>
+                            <group>
+                                <field name="id" invisible="1"/>
+                                <field name="name"/>                               
+                            </group>
+                            <group>                                
+                                <field name="multi_selection"/>
+                                <field name="default_line"/>                                 
+                            </group>
+                            <group>                                
+                                <field name="price_cost_include"/>
+                                <field name="price"/>                                 
+                            </group>
+                            
+                        </group>
+                       
+                        <field name="prop_line">
+                        	<tree string="Options" editable="top">
+						        <field name="name"/>
+						        <field name="description"/>
+						        <field name="price"/>
+						        <field name="rm_product_tmpl_id"/>
+						        <field name="standard_price"/>
+						    </tree>
+                        
+                        </field>
+                      
+                        
+                    </sheet>
+                </form>
+            </field>
+        </record>
+        
+        <record id="pos_product_prop_line_form" model="ir.ui.view">
+            <field name="name">pos.product.prop.line.form</field>
+            <field name="model">pos.product.prop.line</field>
+            <field name="arch" type="xml">
+                <form string="Prop Note Option">
+                    <sheet>
+                        <group>                            
+                           <field name="name"/>                                                                
+                           <field name="rm_product_tmpl_id"/>
+                        </group>
+                         <group>                                                                                                              
+                           <field name="description"/>
+                           <field name="price"/>
+                        </group>                                       
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!--
+        <record id="pos_combo_item_tree" model="ir.ui.view">
+            <field name="name">pos.combo.item.tree</field>
+            <field name="model">pos.combo.item</field>
+            <field name="arch" type="xml">
+                <tree string="Item of Combos">
+                    <field name="product_combo_id"/>
+                    <field name="product_id"/>
+                    <field name="uom_id"/>
+                    <field name="quantity"/>
+                    <field name="default"/>
+                    <field name="tracking"/>
+                </tree>
+            </field>
+        </record>
+
+        <record id="pos_combo_item_search" model="ir.ui.view">
+            <field name="name">pos.combo.item.search</field>
+            <field name="model">pos.combo.item</field>
+            <field name="arch" type="xml">
+                <search string="Item of Combos">
+                    <field name="product_combo_id"/>
+                    <field name="product_id"/>
+                    <field name="uom_id"/>
+                </search>
+            </field>
+        </record>
+
+
+        <record model="ir.actions.act_window" id="pos_combo_item_action">
+            <field name="name">Item of Combos</field>
+            <field name="res_model">pos.combo.item</field>
+            <field name="view_type">form</field>
+            <field name="view_mode">tree,form</field>
+        </record>
+
+        <menuitem id="menu_pos_combo_item"
+                  action="pos_combo_item_action"
+                  parent="menu_retail"
+        />
+        
+        -->
+
+    </data>
+</odoo>
