@@ -21,7 +21,7 @@
     'data': [
         'security/ir.model.access.csv',
         'views/pos_menu.xml',
-        #'reports/pos_manufacturing_report.xml',
+        'reports/pos_manufacturing_report.xml',
         'reports/pos_tracking_client.xml',
         'reports/pos_sale_analytic.xml',
         'reports/report_pos_order.xml',

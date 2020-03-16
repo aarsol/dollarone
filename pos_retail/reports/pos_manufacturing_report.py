@@ -12,7 +12,7 @@ class pos_manufacturing_report(models.Model):
     move_id = fields.Many2one('stock.move', 'Move', readonly=1)
     product_id = fields.Many2one('product.product', string='Product', readonly=1)
     pos_user_id = fields.Many2one('res.users', string='Salesperson', readonly=1)
-    product_uom = fields.Many2one('product.uom', 'Unit of measure', readonly=1)
+    product_uom = fields.Many2one('uom.uom', 'Unit of measure', readonly=1)
     product_qty = fields.Integer(string='Product Quantity', readonly=1)
     location_src_id = fields.Many2one(
         'stock.location', 'Raw Materials Location',
@@ -32,7 +32,7 @@ class pos_manufacturing_report(models.Model):
                     sm.id as move_id, 
                     pp.id as product_id, 
                     mp.pos_user_id as pos_user_id,
-                    pu.id as product_uom, 
+                    pu.id as uom_uom,
                     sm.product_qty as product_qty,
                     mp.location_src_id as location_src_id,
                     mp.location_dest_id as location_dest_id
@@ -42,9 +42,9 @@ class pos_manufacturing_report(models.Model):
                     pos_order as po,
                     product_product as pp,
                     product_template as pt,
-                    product_uom as pu
+                    uom_uom as pu
                 WHERE
-                    pu.id=sm.product_uom
+                    pu.id=sm.uom_uom
                     and pt.id=pp.product_tmpl_id
                     and po.id=mp.pos_id
                     and sm.raw_material_production_id=mp.id
